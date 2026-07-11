@@ -410,9 +410,13 @@
       if (!providerSel || !modelSel) return;
 
       providerSel.innerHTML = '<option value="">请选择供应商</option>';
+      var firstAvailable = null;
       for (var i = 0; i < _llmProviders.length; i++) {
         var p = _llmProviders[i];
-        providerSel.innerHTML += '<option value="' + escapeHtml(p.id) + '">' + escapeHtml(p.name) + '</option>';
+        var hasKey = p.models && p.models.some(function(m) { return m.available !== false; });
+        var label = escapeHtml(p.name) + (hasKey ? ' ✅' : '');
+        providerSel.innerHTML += '<option value="' + escapeHtml(p.id) + '">' + label + '</option>';
+        if (hasKey && !firstAvailable) firstAvailable = p.id;
       }
       providerSel.innerHTML += '<option value="__custom__" style="border-top:2px solid var(--border);margin-top:4px">✏️ 自定义</option>';
 
@@ -437,6 +441,10 @@
         if (selected.modelId && selected.providerId !== '__custom__') {
           modelSel.value = selected.modelId;
         }
+      } else if (firstAvailable) {
+        // 首次使用：自动选第一个有 key 的供应商
+        providerSel.value = firstAvailable;
+        window._tbLLMProviderChange();
       }
 
       state.llmConfig = selected;
