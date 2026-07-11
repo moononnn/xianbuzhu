@@ -1,0 +1,6 @@
+data.json
+data.json.tmp
+data.json.bak
+小纸条/
+*.md.bak
+.DS_Store

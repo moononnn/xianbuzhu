@@ -1,0 +1,36 @@
+{
+  "id": "work-visit",
+  "name": "闲不住",
+  "version": "0.1.0",
+  "description": "在工作时给助手送互动、礼物和恶作剧。展板显示所有助手今天的实时状态，光粒系统自动积累，小铺提供付费礼物。通用设计，自动扫描助手目录，无需手动配置。",
+  "minAppVersion": "0.1.0",
+  "trust": "full-access",
+  "install": {
+    "defaultEnabled": true
+  },
+  "activationEvents": [
+    "onStartup"
+  ],
+  "main": "index.js",
+  "capabilities": [
+    "session",
+    "network.fetch"
+  ],
+  "network": {
+    "allowedHosts": ["*"],
+    "defaultTimeoutMs": 30000
+  },
+  "contributes": {
+    "page": {
+      "title": "闲不住",
+      "route": "/page"
+    },
+    "tools": [
+      "./tools/check-visits.js",
+      "./tools/update-status.js"
+    ],
+    "routes": [
+      "./routes/api.js"
+    ]
+  }
+}
