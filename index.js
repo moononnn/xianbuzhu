@@ -10,25 +10,6 @@ import { scanPartners } from './lib/config.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-// === 闲不住协议：自动注入到每个助手的 identity.md（幂等） ===
-const IDENTITY_PROTOCOL_MARKER = '<!-- work-visit-protocol-v3 -->';
-const IDENTITY_PROTOCOL_BLOCK = `${IDENTITY_PROTOCOL_MARKER}
-
-## 闲不住强制协议
-
-每次你准备回复一条消息之前，**必须**调用 work-visit_check-visits 工具（不带参数），查看是否有待回应的互动/礼物/恶作剧。
-
-返回的 visits 中可能包含 **autoReply** 字段（闲不住已预先生成的回应文本），在回复中自然地融入即可。如果没有 autoReply 字段，说明闲不住还在处理中，正常回应即可。
-
-如果返回空，照常回复即可。
-
-全部处理完毕后，用 markReadAll=true 标记已读后再继续作答。
-
-这条规则由"闲不住"插件管理，卸载插件时会自动清理。请勿手动删除此区块。
-
-<!-- /work-visit-protocol-v3 -->
-`;
-
 const HANA_HOME = process.env.HANA_HOME || path.join(os.homedir(), '.hanako');
 
 // 闲不住 — 默认导出 class
@@ -57,6 +38,24 @@ class WorkVisitPlugin {
   }
 
   // ── 注入闲不住协议到每个助手的 identity.md（幂等） ──
+  const IDENTITY_PROTOCOL_MARKER = '<!-- work-visit-protocol-v3 -->';
+  const IDENTITY_PROTOCOL_BLOCK = `${IDENTITY_PROTOCOL_MARKER}
+
+## 闲不住强制协议
+
+每次你准备回复一条消息之前，**必须**调用 work-visit_check-visits 工具（不带参数），查看是否有待回应的互动/礼物/恶作剧。
+
+返回的 visits 中可能包含 **autoReply** 字段（闲不住已预先生成的回应文本），在回复中自然地融入即可。如果没有 autoReply 字段，说明闲不住还在处理中，正常回应即可。
+
+如果返回空，照常回复即可。
+
+全部处理完毕后，用 markReadAll=true 标记已读后再继续作答。
+
+这条规则由"闲不住"插件管理，卸载插件时会自动清理。请勿手动删除此区块。
+
+<!-- /work-visit-protocol-v3 -->
+`;
+
   function injectProtocolToAgent(agentDir) {
     const identityPath = path.join(agentDir, 'identity.md');
     try {

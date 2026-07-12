@@ -309,19 +309,7 @@ export default async function registerRoutes(app, ctx = {}) {
             }
           } catch {}
 
-          // 从文件内容提取 sessionId 作为 id
-          let sessionId = '';
-          try {
-            const firstLine = content.split('\n')[0];
-            const header = JSON.parse(firstLine);
-            sessionId = header.id || header.sessionId || '';
-          } catch {}
-          if (!sessionId) {
-            // 后备：用文件名生成唯一 id
-            sessionId = `file:${f.replace('.jsonl', '')}`;
-          }
-
-          list.push({ id: sessionId, label, lastTs: lastTs || f.slice(0, 16) });
+          list.push({ id: fullPath, label, lastTs: lastTs || f.slice(0, 16) });
         } catch {}
       }
 
@@ -450,11 +438,16 @@ export default async function registerRoutes(app, ctx = {}) {
       return json({ success: false, error: '请先打开闲不住页面底部「模型设置」配置模型后再使用' }, 400);
     }
 
-    // ── 检查该对话框是否已有待处理的 visit（同对话框不能同时多个，不同对话框可以同时送） ──
+    // ── 检查该对话框是否已有待处理的 visit ──
+    // 如果有，后台自动催一下处理，不阻塞
     if (type === 'interact' || type === 'gift') {
-      const hasPending = (data.pendingVisits || []).some(v => v.to === to && v.replyTarget === replyTarget && v.status === 'pending');
-      if (hasPending) {
-        return json({ success: false, error: '该对话框还有未处理的互动，请等待回复后再试' }, 400);
+      const existing = (data.pendingVisits || []).find(v => v.to === to && v.replyTarget === replyTarget && v.status === 'pending');
+      if (existing) {
+        // 后台异步触发旧 visit 的回应生成，不阻塞返回
+        processVisitEvent(existing, existing.to).catch(err => {
+          console.error('[闲不住] 催收处理失败:', err?.message || err);
+        });
+        return json({ success: false, error: '有未处理的互动消息，已经催ta收礼啦，下一轮再送吧' }, 400);
       }
     }
 
@@ -489,11 +482,20 @@ export default async function registerRoutes(app, ctx = {}) {
     // ── 保存 ──
     saveData(data);
 
-    // ── 闲不住自治：异步调模型处理（回应生成 + 主动注入 + 小纸条） ──
-    // 不阻塞 API 返回
-    processVisitEvent(visit, to).catch(err => {
-      console.error('[闲不住] 异步处理事件失败:', err?.message || err);
-    });
+    // ── 闲不住自治：调模型处理（回应生成 + 小纸条） ──
+    // 关机键同步等待 autoReply 生成，确保下次回复时能读到吐槽
+    if (type === 'prank' && itemId === 'unplug') {
+      try {
+        await processVisitEvent(visit, to);
+      } catch (e) {
+        console.error('[闲不住] 关机键处理失败:', e?.message || e);
+      }
+    } else {
+      // 其他事件不阻塞 API 返回
+      processVisitEvent(visit, to).catch(err => {
+        console.error('[闲不住] 异步处理事件失败:', err?.message || err);
+      });
+    }
 
     return json({
       success: true,
@@ -734,6 +736,62 @@ export default async function registerRoutes(app, ctx = {}) {
       return json({ success: true, reply: result.trim() });
     } catch (e) {
       return json({ success: false, error: e?.message || '连接失败' }, 500);
+    }
+  });
+
+  // ════════════════════════════════════════
+  //  POST /api/uninstall — 彻底卸载（清理所有残留）
+  // ════════════════════════════════════════
+  app.post('/api/uninstall', async (c) => {
+    try {
+      // 1. 删除所有助手 identity.md 中的闲不住协议块
+      const agentsDir = path.join(HANA_HOME, 'agents');
+      if (fs.existsSync(agentsDir)) {
+        const entries = fs.readdirSync(agentsDir, { withFileTypes: true });
+        for (const entry of entries) {
+          if (!entry.isDirectory()) continue;
+          const identityPath = path.join(agentsDir, entry.name, 'identity.md');
+          if (!fs.existsSync(identityPath)) continue;
+          let content = fs.readFileSync(identityPath, 'utf-8');
+          const newContent = content.replace(
+            /<!-- work-visit-protocol-v\d+ -->[\s\S]*?<!-- \/work-visit-protocol-v\d+ -->\s*/g,
+            ''
+          );
+          if (newContent !== content) {
+            fs.writeFileSync(identityPath, newContent, 'utf-8');
+          }
+        }
+      }
+
+      // 2. 删除数据目录
+      const dataDir = path.join(HANA_HOME, 'data', 'work-visit');
+      if (fs.existsSync(dataDir)) {
+        fs.rmSync(dataDir, { recursive: true, force: true });
+      }
+
+      // 3. 删除 skill 目录
+      const skillDir = path.join(HANA_HOME, 'skills', 'work-visit');
+      if (fs.existsSync(skillDir)) {
+        fs.rmSync(skillDir, { recursive: true, force: true });
+      }
+
+      // 4. 清理所有助手 config.yaml 中的 work-visit skill 引用
+      if (fs.existsSync(agentsDir)) {
+        const entries = fs.readdirSync(agentsDir, { withFileTypes: true });
+        for (const entry of entries) {
+          if (!entry.isDirectory()) continue;
+          const configPath = path.join(agentsDir, entry.name, 'config.yaml');
+          if (!fs.existsSync(configPath)) continue;
+          let cfg = fs.readFileSync(configPath, 'utf-8');
+          cfg = cfg.replace(/^\s+- work-visit\n/gm, '');
+          fs.writeFileSync(configPath, cfg, 'utf-8');
+        }
+      }
+
+      return json({ success: true, message: '清理完成，请关闭 Hana 并手动删除插件目录' });
+    } catch (e) {
+      console.error('[闲不住] 卸载清理失败:', e.message);
+      return json({ success: false, error: e.message }, 500);
     }
   });
 

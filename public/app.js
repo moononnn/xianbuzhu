@@ -216,7 +216,15 @@
     html += '<div class="llm-row"><button class="llm-save" onclick="window._tbLLMSave()">保存</button>';
     html += '<button class="llm-test-btn" onclick="window._tbLLMTest()">🔄 测试连接</button>';
     html += '<span class="llm-status" id="llm-status"></span></div>';
-    html += '<div class="llm-test-result" id="llm-test-result"></div></div></div>';
+    html += '<div class="llm-test-result" id="llm-test-result"></div></div>';
+    html += '<div class="uninstall-section">';
+    html += '<hr style="margin:20px 0;border-color:var(--border)">';
+    html += '<details style="font-size:12px;color:var(--text-secondary)">';
+    html += '<summary style="cursor:pointer;color:#e74c3c">⚠️ 彻底卸载闲不住</summary>';
+    html += '<p style="margin:8px 0">点击后清理所有闲不住残留数据，包括：助手协议注入、数据文件、skill 配置。</p>';
+    html += '<p style="margin:8px 0">清理后请关闭 Hana 并手动删除插件目录。</p>';
+    html += '<button class="llm-save" onclick="window._tbUninstall()" style="background:#e74c3c;color:#fff">🗑️ 清理残留数据</button>';
+    html += '</details></div></div></div>';
 
     app.innerHTML = html;
   }
@@ -442,9 +450,27 @@
           modelSel.value = selected.modelId;
         }
       } else if (firstAvailable) {
-        // 首次使用：自动选第一个有 key 的供应商
+        // 首次使用：自动选第一个有 key 的供应商和模型，自动保存
         providerSel.value = firstAvailable;
         window._tbLLMProviderChange();
+        var firstProvider = _llmProviders.find(function(p) { return p.id === firstAvailable; });
+        if (firstProvider && firstProvider.models) {
+          var firstModel = firstProvider.models.find(function(m) { return m.available !== false; });
+          if (firstModel) {
+            modelSel.value = firstModel.id;
+            // 自动保存
+            try {
+              await api('/api/llm-settings', {
+                method: 'POST',
+                body: JSON.stringify({ providerId: firstAvailable, modelId: firstModel.id }),
+              });
+              state.llmConfig = { providerId: firstAvailable, modelId: firstModel.id };
+              if (status) status.textContent = '当前：' + firstAvailable + ' / ' + firstModel.id;
+            } catch (e) {
+              console.error('[闲不住] 自动保存配置失败:', e);
+            }
+          }
+        }
       }
 
       state.llmConfig = selected;
@@ -678,6 +704,10 @@
     }
 
     try {
+      // 关机键需要等待，先给用户反馈
+      if (currentAction.type === 'prank' && currentAction.itemId === 'unplug') {
+        toast('⏳ 正在关机...');
+      }
       var data = await api('/api/visit', {
         method: 'POST',
         body: JSON.stringify({
@@ -790,6 +820,19 @@
       list.innerHTML = html || '<div class="notes-empty">还没有小纸条 ✨</div>';
     } catch (e) {
       console.error('[闲不住] 加载小纸条失败:', e);
+    }
+  }
+
+  window._tbUninstall = async function() {
+    try {
+      var data = await api('/api/uninstall', { method: 'POST' });
+      if (data.success) {
+        toast('✅ 清理完成，请关闭 Hana 并手动删除插件目录');
+      } else {
+        toast('❌ 清理失败：' + (data.error || '未知错误'), 'error');
+      }
+    } catch (e) {
+      toast('❌ 网络错误：' + (e.message || '未知'), 'error');
     }
   }
 
