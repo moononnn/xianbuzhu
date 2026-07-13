@@ -755,4 +755,83 @@ export default async function registerRoutes(app, ctx = {}) {
     }
   });
 
+  // ════════════════════════════════════════
+  //  GET /api/check-update — 检查 GitHub 更新
+  // ════════════════════════════════════════
+  app.get('/api/check-update', async (c) => {
+    try {
+      const manifestPath = path.join(__dirname, '..', 'manifest.json');
+      const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+      const currentVersion = manifest.version || '0.1.0';
+
+      // 获取最新 tag
+      const resp = await fetch('https://api.github.com/repos/moononnn/xianbuzhu/tags?per_page=1', {
+        headers: { 'Accept': 'application/vnd.github+json', 'User-Agent': 'work-visit' },
+        signal: AbortSignal.timeout(8000),
+      });
+
+      if (!resp.ok) {
+        return json({
+          success: true, current: currentVersion, latest: null, hasUpdate: false,
+          message: 'GitHub API 暂时不可用（' + resp.status + '）',
+        });
+      }
+
+      const tags = await resp.json();
+      if (!tags || !Array.isArray(tags) || tags.length === 0) {
+        return json({
+          success: true, current: currentVersion, latest: currentVersion, hasUpdate: false,
+          message: '已是最新版本 ✨',
+        });
+      }
+
+      const latestTag = tags[0].name.replace(/^v/, '');
+      const hasUpdate = compareVersions(latestTag, currentVersion) > 0;
+
+      // 获取 release 内容
+      let releaseBody = '';
+      if (hasUpdate) {
+        try {
+          const releaseResp = await fetch(`https://api.github.com/repos/moononnn/xianbuzhu/releases/tags/${tags[0].name}`, {
+            headers: { 'Accept': 'application/vnd.github+json', 'User-Agent': 'work-visit' },
+            signal: AbortSignal.timeout(5000),
+          });
+          if (releaseResp.ok) {
+            const release = await releaseResp.json();
+            releaseBody = release.body || '';
+          }
+        } catch { /* release body 获取失败不影响主流程 */ }
+      }
+
+      return json({
+        success: true,
+        current: currentVersion,
+        latest: latestTag,
+        hasUpdate,
+        updateUrl: hasUpdate ? `https://github.com/moononnn/xianbuzhu/releases/tag/${tags[0].name}` : null,
+        downloadUrl: hasUpdate ? `https://github.com/moononnn/xianbuzhu/archive/refs/tags/${tags[0].name}.zip` : null,
+        releaseBody,
+        message: hasUpdate
+          ? `发现新版本 v${latestTag}！当前 v${currentVersion}`
+          : '已是最新版本 ✨',
+      });
+    } catch (e) {
+      console.error('[闲不住] 检查更新失败:', e.message || e);
+      return json({ success: false, error: e.message || '网络不可达' });
+    }
+  });
+
+}
+
+// ─── 版本号比较（semver） ───
+function compareVersions(a, b) {
+  const pa = a.split('.').map(Number);
+  const pb = b.split('.').map(Number);
+  for (let i = 0; i < 3; i++) {
+    const va = pa[i] || 0;
+    const vb = pb[i] || 0;
+    if (va > vb) return 1;
+    if (va < vb) return -1;
+  }
+  return 0;
 }

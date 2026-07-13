@@ -237,9 +237,13 @@
     html += '<span class="llm-status" id="llm-custom-status"></span></div>';
     html += '<div class="llm-test-result" id="llm-custom-result"></div></div>';
     html += '<div class="llm-row"><button class="llm-save" onclick="window._tbLLMSave()">保存</button>';
-    html += '<button class="llm-test-btn" onclick="window._tbLLMTest()">🔄 测试连接</button>';
     html += '<span class="llm-status" id="llm-status"></span></div>';
-    html += '<div class="llm-test-result" id="llm-test-result"></div></div>';
+    html += '<div class="llm-test-result" id="llm-test-result"></div>';
+    html += '<div class="llm-row" style="margin-top:12px;gap:8px;display:flex;flex-wrap:wrap">';
+    html += '<button class="llm-save" onclick="window._tbLLMTest()" style="background:var(--accent-soft);color:var(--text)">🔄 测试连接</button>';
+    html += '<button class="llm-save" onclick="window._tbCheckUpdate()" style="background:var(--accent-soft);color:var(--text)">📦 检查更新</button>';
+    html += '</div>';
+    html += '<div id="update-result" style="font-size:12px;margin-top:8px;color:var(--text-secondary)"></div></div>';
     html += '<div class="uninstall-section">';
     html += '<hr style="margin:20px 0;border-color:var(--border)">';
     html += '<details style="font-size:12px;color:var(--text-secondary)">';
@@ -915,6 +919,43 @@
     // 方法3：注入失败，展示文本让用户手动复制
     toast('🧠 没自动插进去，怪话内容：' + text, 'error');
   }
+
+  // ─── 检查更新 ───
+  window._tbCheckUpdate = async function() {
+    var resultEl = document.getElementById('update-result');
+    if (resultEl) resultEl.innerHTML = '<span style="color:#888">↻ 正在检查更新...</span>';
+    try {
+      var data = await api('/api/check-update');
+      if (!data.success) {
+        if (resultEl) resultEl.innerHTML = '<span style="color:#e74c3c">❌ ' + (data.error || '检查失败') + '</span>';
+        return;
+      }
+      if (!data.hasUpdate) {
+        if (resultEl) resultEl.innerHTML = '✅ ' + data.message;
+        return;
+      }
+      // 有更新：显示更新卡片
+      var html = '<div style="margin-top:12px;padding:12px;background:var(--card);border-radius:8px;border:1px solid var(--border);font-size:13px">';
+      html += '<div style="font-weight:600;margin-bottom:8px">🎉 ' + data.message + '</div>';
+      if (data.releaseBody) {
+        // 简单渲染 release body（GitHub markdown 转纯文本）
+        var body = data.releaseBody
+          .replace(/^###?\s+(.+)/gm, '<strong>$1</strong>')
+          .replace(/^-\s+(.+)/gm, '· $1')
+          .replace(/\n\n/g, '<br><br>')
+          .replace(/\n/g, '<br>');
+        html += '<div style="color:var(--text-secondary);max-height:200px;overflow-y:auto;margin-bottom:10px;line-height:1.6">' + body + '</div>';
+      }
+      html += '<div style="display:flex;gap:8px">';
+      html += '<a href="' + data.downloadUrl + '" class="llm-save" style="display:inline-block;text-decoration:none;padding:6px 14px;font-size:13px;background:var(--accent);color:#fff;border-radius:6px">⬇ 下载更新</a>';
+      html += '<a href="' + data.updateUrl + '" target="_blank" class="llm-save" style="display:inline-block;text-decoration:none;padding:6px 14px;font-size:13px;background:var(--accent-soft);color:var(--text);border-radius:6px">查看详情 →</a>';
+      html += '</div></div>';
+      if (resultEl) resultEl.innerHTML = html;
+    } catch (e) {
+      if (resultEl) resultEl.innerHTML = '<span style="color:#e74c3c">网络错误</span>';
+      console.error('[闲不住] 检查更新:', e);
+    }
+  };
 
   // ─── 启动 ───
   loadData();
