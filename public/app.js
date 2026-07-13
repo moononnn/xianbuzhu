@@ -788,13 +788,17 @@
       div.className = 'modal-overlay';
       div.id = 'notes-overlay';
       div.innerHTML = '<div class="modal notes-modal">' +
-        '<h3>📝 小纸条 <button class="modal-close" onclick="document.getElementById(\'notes-overlay\').classList.remove(\'show\')">✕</button></h3>' +
+        '<div class="notes-modal-header">' +
+        '<h3>📝 小纸条</h3>' +
+        '<button class="modal-close" onclick="document.getElementById(\'notes-overlay\').classList.remove(\'show\')">✕</button>' +
+        '</div>' +
         '<div class="notes-list" id="notes-list">' +
         '<div class="llm-loading">加载中...</div></div></div>';
       div.addEventListener('click', function(e) {
         if (e.target === div) div.classList.remove('show');
       });
       document.body.appendChild(div);
+      overlay = div;
     }
     overlay.classList.add('show');
     await loadNotes();
@@ -817,7 +821,7 @@
       var groups = data.groups || {};
       var keys = Object.keys(groups);
       if (keys.length === 0) {
-        list.innerHTML = '<div class="notes-empty">还没有小纸条 ✨</div>';
+        list.innerHTML = '<div class="notes-empty"><div class="notes-empty-icon">💌</div>还没有小纸条 ✨</div>';
         return;
       }
 
@@ -827,24 +831,42 @@
         var notes = g.notes || [];
         if (notes.length === 0) continue;
 
+        var color = g.color || '#999';
+        var initial = g.name.charAt(0);
+
+        // 助手折叠卡片
         html += '<div class="notes-group">';
-        html += '<div class="notes-group-header">';
-        html += '<span class="notes-group-dot" style="background:' + (g.color || '#999') + '"></span>';
-        html += g.name + '</div>';
+        html += '<div class="notes-group-header" onclick="window._tbToggleGroup(this)">';
+        html += '<div class="notes-group-avatar" style="background:' + color + '">' + escapeHtml(initial) + '</div>';
+        html += '<span class="notes-group-name">' + escapeHtml(g.name) + '</span>';
+        html += '<span class="notes-group-count">' + notes.length + ' 条</span>';
+        html += '<span class="notes-group-arrow">▶</span>';
+        html += '</div>';
+        html += '<div class="notes-group-body">';
 
         for (var j = 0; j < notes.length; j++) {
           var n = notes[j];
           var dateStr = n.createdAt ? timeAgo(n.createdAt) : '';
-          var triggerLabel = n.triggerType === 'gift' ? '🎁' : '💬';
+          var triggerLabel = n.triggerType === 'gift' ? '🎁 礼物' : '💬 互动';
+          var itemLabel = n.itemName || '';
+
           html += '<div class="notes-item">';
-          html += '<div class="notes-meta">' + triggerLabel + ' ' + (n.itemName || '互动') + (dateStr ? ' · ' + dateStr : '') + '</div>';
+          html += '<div class="notes-item-bar" style="background:' + color + '"></div>';
+          html += '<div class="notes-item-body">';
+          html += '<div class="notes-meta">';
+          html += '<span class="notes-meta-tag">' + triggerLabel + '</span>';
+          if (itemLabel) html += escapeHtml(itemLabel);
+          html += '<span class="notes-meta-time">' + dateStr + '</span>';
+          html += '</div>';
           html += '<div class="notes-content">' + escapeHtml(n.content) + '</div>';
+          html += '</div>';
           html += '</div>';
         }
         html += '</div>';
+        html += '</div>';
       }
 
-      list.innerHTML = html || '<div class="notes-empty">还没有小纸条 ✨</div>';
+      list.innerHTML = html || '<div class="notes-empty"><div class="notes-empty-icon">💌</div>还没有小纸条 ✨</div>';
     } catch (e) {
       console.error('[闲不住] 加载小纸条失败:', e);
     }
@@ -958,6 +980,14 @@
   };
 
   // ─── 启动 ───
+  // ─── 折叠小纸条 ───
+  window._tbToggleGroup = function(header) {
+    var group = header.parentElement;
+    group.classList.toggle('open');
+    var arrow = header.querySelector('.notes-group-arrow');
+    if (arrow) arrow.textContent = group.classList.contains('open') ? '▼' : '▶';
+  };
+
   loadData();
 
   if (window.parent && window.parent !== window) {

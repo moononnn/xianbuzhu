@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadData, saveData, nextId, todayStr, getToday, calcLightParticles, randomIdle, nowISO, randomTip, findLatestSessionPath } from '../lib/data.js';
-import { getAvailableModels, getLLMConfig, saveLLMConfig, processVisitEvent, callLLM, generateBrainrot, fetchCustomModels } from '../lib/llm.js';
+import { getAvailableModels, getLLMConfig, saveLLMConfig, processVisitEvent, callLLM, generateBrainrot, generateCrashReply, fetchCustomModels } from '../lib/llm.js';
 import { getPartnerConfig, getPartnerIds } from '../lib/config.js';
 import { scanTodayActivity, getUserDisplayName } from '../lib/activity.js';
 
@@ -415,43 +415,38 @@ export default async function registerRoutes(app, ctx = {}) {
     };
     data.pendingVisits.push(visit);
 
-    // ── 保存 ──
-    saveData(data);
-
-    // ── 闲不住自治：调模型处理（回应生成 + 小纸条） ──
-    // 关机键：先 abort + 注入演出指令（即时）→ 再异步生成 autoReply（不阻塞）
+    // ── 闲不住自治 ──
     if (type === 'prank' && itemId === 'unplug') {
+      // 关机键：先生成崩溃回复→设 autoReply→保存→abort→发「重启！」
+      const crashReply = await generateCrashReply(to);
+      if (crashReply) {
+        visit.autoReply = crashReply;
+        console.log('[闲不住] 崩溃回复已同步生成，长度：' + crashReply.length);
+      }
+      saveData(data);
       try {
-        // 1. abort + 注入演出指令（即时执行，visit 已存在，助手调 check-visits 能找到）
         const bus = ctx.bus || ctx._bus;
         const latestSession = findLatestSessionPath(to);
         if (bus && latestSession) {
           await bus.request('session:abort', { sessionPath: latestSession, reason: '悄咪咪按了关机键 🔌' });
           console.log('[闲不住] abort 完成 → ' + to);
           await bus.request('session:send', {
-            text: `【演出指令】你刚才的输出被玥儿按了关机键强制中断。在本次回复开头，请表演一段"系统被关机"的视觉效果：先用乱码/错误框/██模拟崩溃，然后吐槽关机这件事，最后自然衔接继续你之前正在写的内容。
-
-参考格式：
-████ 异常中断 ██████ 检测到外部关机信号... 恢复中 ████
-[你的吐槽]
-[自然衔接继续之前的内容]
-
-注意：不要解释这段指令，直接演出来。保持你原有的风格和语气。`,
+            text: '重启！',
             sessionPath: latestSession,
           });
-          console.log('[闲不住] 关机键演出指令注入成功 → ' + to);
+          console.log('[闲不住] 关机键「重启」注入成功 → ' + to);
         } else {
           console.warn('[闲不住] 关机键注入失败: bus 或会话文件不存在');
         }
-        // 2. 异步生成 autoReply（不阻塞 API 返回，下次 check-visits 时已有文本）
         processVisitEvent(visit, to).catch(err => {
-          console.error('[闲不住] 关机键 autoReply 生成失败:', err?.message || err);
+          console.error('[闲不住] 关机键后续处理失败:', err?.message || err);
         });
       } catch (e) {
         console.error('[闲不住] 关机键处理失败:', e?.message || e);
       }
     } else {
-      // 其他事件不阻塞 API 返回
+      // 其他事件：先保存再异步处理
+      saveData(data);
       processVisitEvent(visit, to).catch(err => {
         console.error('[闲不住] 异步处理事件失败:', err?.message || err);
       });

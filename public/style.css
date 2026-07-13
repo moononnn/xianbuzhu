@@ -456,62 +456,186 @@ body {
 
 /* ── 小纸条弹窗 ── */
 .notes-modal .modal {
-  max-height: 70vh;
+  max-height: 75vh;
+  max-width: 400px;
+  padding: 0;
+  overflow: hidden;
+  border-radius: 12px;
 }
-.notes-modal h3 {
+.notes-modal-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  padding: 16px 18px 12px;
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  background: var(--card);
+  z-index: 1;
+}
+.notes-modal-header h3 {
+  font-size: 15px;
+  font-weight: 500;
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.notes-modal-header .modal-close {
+  font-size: 16px;
+  color: var(--text-secondary);
+  padding: 2px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.notes-modal-header .modal-close:hover {
+  background: var(--bg);
+  color: var(--text);
 }
 .notes-list {
-  max-height: 50vh;
+  max-height: 58vh;
   overflow-y: auto;
-  margin-top: 8px;
+  padding: 14px 16px 18px;
 }
 .notes-empty {
   text-align: center;
   color: var(--text-secondary);
   font-size: 13px;
-  padding: 24px 0;
+  padding: 36px 0;
 }
+.notes-empty-icon {
+  font-size: 28px;
+  margin-bottom: 8px;
+  opacity: 0.6;
+}
+
+/* ── 助手折叠卡片 ── */
 .notes-group {
-  margin-bottom: 14px;
+  margin-bottom: 12px;
+  background: var(--bg);
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  transition: box-shadow 0.2s;
 }
 .notes-group:last-child { margin-bottom: 0; }
 .notes-group-header {
   display: flex;
   align-items: center;
-  gap: 6px;
-  font-size: 11px;
+  gap: 8px;
+  padding: 10px 12px;
+  font-size: 12px;
   font-weight: 600;
+  color: var(--text);
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.15s;
+}
+.notes-group-header:hover {
+  background: var(--accent-soft);
+}
+.notes-group-avatar {
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+.notes-group-name {
+  flex: 1;
+}
+.notes-group-count {
+  font-size: 10px;
+  font-weight: 500;
   color: var(--text-secondary);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  margin-bottom: 6px;
-  padding-bottom: 4px;
-  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+  padding: 1px 8px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
 }
-.notes-group-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  display: inline-block;
-}
-.notes-item {
-  padding: 8px 0;
-  border-bottom: 1px solid var(--border);
-}
-.notes-item:last-child { border-bottom: none; }
-.notes-meta {
+.notes-group-arrow {
   font-size: 10px;
   color: var(--text-secondary);
-  margin-bottom: 4px;
+  transition: transform 0.25s;
+  margin-left: 4px;
+}
+.notes-group.open .notes-group-arrow {
+  transform: rotate(90deg);
+}
+.notes-group-body {
+  display: none;
+  padding: 4px 8px 10px;
+}
+.notes-group.open .notes-group-body {
+  display: block;
+  animation: notesSlideIn 0.25s ease-out;
+}
+@keyframes notesSlideIn {
+  from { opacity: 0; transform: translateY(-6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* ── 纸条条目 ── */
+.notes-item {
+  display: flex;
+  gap: 10px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--card);
+  margin: 0 6px 6px;
+  border-radius: 8px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+  position: relative;
+  transition: box-shadow 0.15s;
+}
+.notes-item:last-child {
+  margin-bottom: 8px;
+  border-bottom: none;
+}
+.notes-item:hover {
+  box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+}
+.notes-item-bar {
+  width: 3px;
+  border-radius: 2px;
+  flex-shrink: 0;
+  align-self: stretch;
+}
+.notes-item-body {
+  flex: 1;
+  min-width: 0;
+}
+.notes-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  color: var(--text-secondary);
+  margin-bottom: 5px;
+}
+.notes-meta-tag {
+  font-size: 9px;
+  padding: 0 5px;
+  border-radius: 3px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 500;
+}
+.notes-meta-time {
+  margin-left: auto;
+  opacity: 0.7;
 }
 .notes-content {
-  font-size: 13px;
+  font-size: 12.5px;
   line-height: 1.7;
   color: var(--text);
   white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .llm-modal .modal {
@@ -727,12 +851,13 @@ body {
   to { opacity: 1; transform: translateY(0); }
 }
 
-/* ── 小纸条按钮脉冲动画 ── */
+/* ── 小纸条按钮：有新纸条时的提醒 ── */
 .topbar-note-btn.pulse {
-  animation: pulseRing 1.5s ease-in-out infinite;
+  animation: pulseGlow 2s ease-in-out infinite;
+  position: relative;
 }
-@keyframes pulseRing {
-  0% { box-shadow: 0 0 0 0 var(--accent-soft); }
-  70% { box-shadow: 0 0 0 8px transparent; }
-  100% { box-shadow: 0 0 0 0 transparent; }
+@keyframes pulseGlow {
+  0% { box-shadow: 0 0 0 0 rgba(244, 114, 182, 0.5); border-color: #f472b6; }
+  50% { box-shadow: 0 0 14px 5px rgba(244, 114, 182, 0.3); border-color: #f9a8d4; }
+  100% { box-shadow: 0 0 0 0 rgba(244, 114, 182, 0.5); border-color: #f472b6; }
 }

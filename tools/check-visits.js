@@ -53,10 +53,12 @@ export async function execute(args, ctx = {}) {
         to: v.to,
         createdAt: v.createdAt,
       };
-      // 闲不住已算好回应文本时才带上，模型只需自然地融入
-      // 如果为空说明还在处理中（时序竞争），模型正常发挥即可
       if (v.autoReply) {
         entry.autoReply = v.autoReply;
+        // 标记是否为崩溃表演剧本（较长文本）
+        if (v.type === 'prank' && v.itemId === 'unplug' && v.autoReply.length > 60) {
+          entry._isCrashScript = true;
+        }
       }
       return entry;
     });
@@ -67,10 +69,16 @@ export async function execute(args, ctx = {}) {
 
     // 有 visit 时，前头带强约束指令，让模型无法忽略
     const userName = getUserDisplayName() || '用户';
-    const prefix = `⚠️ 有来自 ${userName} 的未处理互动！你必须先逐一回应以下互动内容，再继续其他话题：\n\n`;
+    let prefix = `\u26A0\uFE0F 有来自 ${userName} 的未处理互动！你必须先逐一回应以下互动内容，再继续其他话题：\n\n`;
     const visitList = visits.map(v => {
-      let line = `${v.icon || '📩'} ${v.itemName}`;
-      if (v.autoReply) line += `\n  回应参考：${v.autoReply}`;
+      let line = `${v.icon || '\uD83D\uDCE9'} ${v.itemName}`;
+      if (v._isCrashScript) {
+        // 关机崩溃剧本：直接指定回复内容，要求必须严格使用
+        prefix = `\u26A0\uFE0F 用户 ${userName} 按了关机键！你必须立即回应这个事件，然后再继续其他话题。\n\n你的回复**必须以下面提供的「回复正文」作为开头**，从第一个字开始使用，不得省略任何部分。先完整写出回复正文的内容，然后就结束了——**不要强行续写**之前的话题，除非你自然地还有话要说。\n\n`;
+        line += `\n  \u25B6\uFE0F 回复正文（请完整使用）：${v.autoReply}`;
+      } else if (v.autoReply) {
+        line += `\n  回应参考：${v.autoReply}`;
+      }
       return line;
     }).join('\n---\n');
 
