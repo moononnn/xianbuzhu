@@ -410,6 +410,29 @@ body {
   background: #dc2626;
   color: #fff;
 }
+.toast-persist {
+  background: linear-gradient(135deg, #f0a088, #d884ad);
+  color: #fff;
+  border: 1px solid rgba(255,255,255,0.15);
+  box-shadow: 0 6px 28px rgba(216,132,173,0.3);
+  font-size: 13px;
+  padding: 10px 22px;
+  z-index: 300;
+  animation: toastBreathe 2.4s ease-in-out infinite;
+}
+
+@keyframes toastBreathe {
+  0%, 100% {
+    transform: translateX(-50%) scale(1);
+    opacity: 1;
+    box-shadow: 0 6px 28px rgba(216,132,173,0.3);
+  }
+  50% {
+    transform: translateX(-50%) scale(1.05);
+    opacity: 0.75;
+    box-shadow: 0 10px 40px rgba(216,132,173,0.5);
+  }
+}
 @keyframes toastIn {
   from { opacity: 0; transform: translateX(-50%) translateY(8px); }
   to { opacity: 1; transform: translateX(-50%) translateY(0); }

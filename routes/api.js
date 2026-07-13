@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { loadData, saveData, nextId, todayStr, getToday, calcLightParticles, randomIdle, nowISO, resolveSessionId, randomTip } from '../lib/data.js';
+import { loadData, saveData, nextId, todayStr, getToday, calcLightParticles, randomIdle, nowISO, randomTip, findLatestSessionPath } from '../lib/data.js';
 import { getAvailableModels, getLLMConfig, saveLLMConfig, processVisitEvent, callLLM, generateBrainrot, fetchCustomModels } from '../lib/llm.js';
 import { getPartnerConfig, getPartnerIds } from '../lib/config.js';
 import { scanTodayActivity, getUserDisplayName } from '../lib/activity.js';
@@ -13,6 +13,55 @@ import { scanTodayActivity, getUserDisplayName } from '../lib/activity.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 const HANA_HOME = process.env.HANA_HOME || path.join(os.homedir(), '.hanako');
+
+// ─── 通过 session-manifest.db 将最新会话文件解析为 sess_xxx ID ───
+async function findLatestSessionId(agentId) {
+  try {
+    const latestPath = findLatestSessionPath(agentId);
+    if (!latestPath) return '';
+
+    // 方案1：从 session-manifest.db 查询（准确）
+    const manifestPath = path.join(HANA_HOME, 'session-manifest.db');
+    if (fs.existsSync(manifestPath)) {
+      try {
+        const { execSync } = await import('node:child_process');
+        const escapedPath = latestPath.replace(/'/g, "''");
+        const result = execSync(
+          `sqlite3 "${manifestPath}" "SELECT session_id FROM session_manifests WHERE current_locator_path = '${escapedPath}' LIMIT 1;"`,
+          { encoding: 'utf8', timeout: 5000, windowsHide: true }
+        ).trim();
+        if (result && result.startsWith('sess_')) {
+          return result;
+        }
+      } catch (e) {
+        console.error('[闲不住] manifest 查询失败:', e?.message || e);
+      }
+    }
+
+    // 方案2：从 session-titles.json 取最新的 sess_xxx（备选）
+    const titlesPath = path.join(HANA_HOME, 'agents', agentId, 'sessions', 'session-titles.json');
+    if (fs.existsSync(titlesPath)) {
+      try {
+        const raw = fs.readFileSync(titlesPath, 'utf-8');
+        const titles = JSON.parse(raw);
+        let latestSess = '';
+        for (const key of Object.keys(titles)) {
+          if (key.startsWith('sess_') && key > latestSess) {
+            latestSess = key;
+          }
+        }
+        if (latestSess) return latestSess;
+      } catch (e) {
+        console.error('[闲不住] session-titles 解析失败:', e?.message || e);
+      }
+    }
+
+    return '';
+  } catch (e) {
+    console.error('[闲不住] 解析 sess_xxx ID 失败:', e?.message || e);
+    return '';
+  }
+}
 
 // ─── 辅助 ───
 async function readBody(c) {
@@ -227,131 +276,6 @@ export default async function registerRoutes(app, ctx = {}) {
   });
 
   // ════════════════════════════════════════
-  //  GET /api/sessions — 会话列表
-  // ════════════════════════════════════════
-  app.get('/api/sessions', (c) => {
-    const data = loadData();
-    const partnerIds = getPartnerIds(data);
-    const partnerConfig = getPartnerConfig(data);
-
-    const groups = {};
-    for (const agent of partnerIds) {
-      const sessionsDir = path.join(HANA_HOME, 'agents', agent, 'sessions');
-      const memDir = path.join(HANA_HOME, 'agents', agent, 'memory', 'summaries');
-
-      // ── 读取该 agent 自己的 session-titles.json ──
-      let agentTitles = {};
-      const titlesPath = path.join(sessionsDir, 'session-titles.json');
-      try {
-        if (fs.existsSync(titlesPath)) {
-          agentTitles = JSON.parse(fs.readFileSync(titlesPath, 'utf-8'));
-        }
-      } catch {}
-
-      const list = [];
-
-      // ── 处理以文件路径为键的旧版会话 ──
-      let oldFiles = [];
-      try {
-        oldFiles = fs.readdirSync(sessionsDir).filter(f => f.endsWith('.jsonl'));
-      } catch {}
-
-      for (const f of oldFiles) {
-        try {
-          const fullPath = path.join(sessionsDir, f);
-          const content = fs.readFileSync(fullPath, 'utf-8');
-
-          let label = agentTitles[fullPath] || agentTitles[f] || '';
-
-          // 从文件内容中找 sess_xxx 标题映射
-          if (!label) {
-            const sessMatches = content.matchAll(/sess_[a-z0-9]+_[a-f0-9]+/g);
-            for (const sm of sessMatches) {
-              const title = agentTitles[sm[0]];
-              if (title) {
-                label = title;
-                break;
-              }
-            }
-          }
-
-          // 取首条用户消息
-          if (!label) {
-            const lines = content.split('\n').filter(Boolean);
-            for (const line of lines) {
-              try {
-                const d = JSON.parse(line);
-                if (d.type === 'message' && d.message?.role === 'user') {
-                  const parts = d.message?.content || [];
-                  const text = parts.map(p => typeof p === 'string' ? p : (p.text || '')).filter(Boolean).join(' ');
-                  if (text) { label = text.length > 25 ? text.slice(0, 25) + '…' : text; break; }
-                }
-              } catch {}
-            }
-          }
-
-          if (!label) {
-            const match = f.match(/^(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2})/);
-            label = match ? match[1].replace(/T/, ' ') : f.slice(0, 20);
-          }
-
-          // 取最新消息时间
-          let lastTs = '';
-          try {
-            const lines = content.split('\n').filter(Boolean);
-            for (const line of lines) {
-              try {
-                const d = JSON.parse(line);
-                if (d.type === 'message' && d.timestamp) {
-                  if (!lastTs || d.timestamp > lastTs) lastTs = d.timestamp;
-                }
-              } catch {}
-            }
-          } catch {}
-
-          list.push({ id: fullPath, label, lastTs: lastTs || f.slice(0, 16) });
-        } catch {}
-      }
-
-      // ── 处理 sess_ 开头的新版会话（从摘要文件拿时间） ──
-      for (const [key, title] of Object.entries(agentTitles)) {
-        if (!key.startsWith('sess_')) continue;
-
-        // 从 memory/summaries/ 读取摘要文件获取更新时间
-        let lastTs = '';
-        try {
-          const summaryPath = path.join(memDir, key + '.json');
-          if (fs.existsSync(summaryPath)) {
-            const summary = JSON.parse(fs.readFileSync(summaryPath, 'utf-8'));
-            lastTs = summary.updated_at || summary.source_time_range?.end || '';
-          }
-        } catch {}
-
-        // 没有摘要文件或没有时间戳的 sess_ 条目跳过（不知道最后活动时间，排到最末尾）
-        if (!lastTs) continue;
-
-        list.push({
-          id: key,
-          label: title,
-          lastTs,
-        });
-      }
-
-      // 按最后活动时间排序，新→旧
-      list.sort((a, b) => b.lastTs.localeCompare(a.lastTs));
-      // 取最新的 12 条
-      list.splice(12);
-      if (list.length > 0) {
-        groups[agent] = {
-          name: partnerConfig[agent]?.name || agent,
-          sessions: list,
-        };
-      }
-    }
-    return json({ success: true, groups });
-  });
-
-  // ════════════════════════════════════════
   //  POST /api/claim — 领取光粒
   // ════════════════════════════════════════
   app.post('/api/claim', async (c) => {
@@ -379,7 +303,7 @@ export default async function registerRoutes(app, ctx = {}) {
     const input = await readBody(c);
     const data = loadData();
 
-    const { type, itemId, to, replyTarget } = input;
+    const { type, itemId, to } = input;
 
     if (!type || !itemId || !to) {
       return json({ success: false, error: '缺少必要参数' }, 400);
@@ -396,59 +320,72 @@ export default async function registerRoutes(app, ctx = {}) {
 
     if (!item) return json({ success: false, error: '项目不存在' }, 400);
 
-    // ── 恶作剧处理 ──
-    if (type === 'prank') {
-      if (itemId === 'unplug') {
-        // 关机键：中断当前对话，同时走自治链路生成被恶作剧的回应
-        try {
-          const bus = ctx.bus || ctx._bus;
-          if (bus && replyTarget) {
-            bus.request?.('session:abort', { sessionPath: replyTarget, reason: '悄咪咪按了关机键 🔌' });
+    // ── 检查同一助手是否有未处理的互动 ──
+    const existing = (data.pendingVisits || []).find(v => v.to === to && v.status === 'pending');
+    if (existing) {
+      // 刷新 autoReply
+      processVisitEvent(existing, to).catch(err => {
+        console.error('[闲不住] 催收处理失败:', err?.message || err);
+      });
+      // 主动推送到对话框，催助手下一轮优先处理
+      try {
+        const bus = ctx.bus || ctx._bus;
+        if (bus) {
+          const sessionId = await findLatestSessionId(to);
+          if (sessionId) {
+            const nudgeText = `📬 有${existing.type === 'gift' ? '礼物' : '互动'}在等你回应哦～`;
+            await bus.request('session:send', { text: nudgeText, sessionId });
+            console.log(`[闲不住] 催收推送成功 → ${to} 会话 ${sessionId}`);
+          } else {
+            console.warn(`[闲不住] 催收推送失败: 未找到 ${to} 的会话 ID`);
           }
-        } catch (e) {
-          console.error('[闲不住] abort 失败:', e?.message || e);
+        } else {
+          console.warn('[闲不住] 催收推送失败: bus 不可用');
         }
-        // 不 return，继续保存 visit 走自治链路
-      } else if (itemId === 'brainrot') {
-        // 脑洞袭击：不打断，直接生成奇怪话注入到对话框
+      } catch (e) {
+        console.error('[闲不住] 催收推送失败:', e?.message || e);
+      }
+      return json({ success: false, error: '已经给ta送过啦，已经催ta查看啦，返回窗口聊聊看~✨', nudged: true }, 400);
+    }
+
+    // ── 恶作剧处理 ──
+    // brainrot 在 visit 创建前处理（需要立即返回成功/失败）
+    // unplug 移到 visit 创建后处理（session:send 会触发助手回复，需要 visit 已存在）
+    if (type === 'prank') {
+      if (itemId === 'brainrot') {
+        // 脑洞袭击：生成怪话 → 解析最新会话的 sess_xxx ID → 后端注入到聊天
+        const brainrot = await generateBrainrot();
+        if (!brainrot) {
+          return json({ success: false, error: '怪话生成失败' }, 500);
+        }
+        let injected = false;
         try {
           const bus = ctx.bus || ctx._bus;
-          if (bus && replyTarget) {
-            const sessionId = resolveSessionId(replyTarget);
+          if (bus) {
+            const sessionId = await findLatestSessionId(to);
             if (sessionId) {
-              const brainrot = await generateBrainrot();
-              if (brainrot) {
-                await bus.request('session:send', {
-                  text: `🧠 ${brainrot}`,
-                  sessionId,
-                });
-              }
+              await bus.request('session:send', {
+                text: brainrot,
+                sessionId,
+              });
+              injected = true;
             }
           }
         } catch (e) {
-          console.error('[闲不住] brainrot 注入失败:', e?.message || e);
+          console.error('[闲不住] 脑洞注入失败:', e?.message || e);
         }
-        return json({ success: true, prank: 'brainrot' });
+        if (!injected) {
+          // 注入失败，返回文本让前端展示
+          return json({ success: true, jar: data.jar, brainrot, injected: false });
+        }
+        return json({ success: true, jar: data.jar, injected: true });
       }
     }
 
-    // ── 检查模型是否已配置（所有事件都需要闲不住模型） ──
+    // ── 检查模型是否已配置（恶作剧类不强制，可跳过） ──
     const llmOk = !!(data.llmConfig?.providerId && data.llmConfig?.modelId);
-    if (!llmOk) {
+    if (!llmOk && type !== 'prank') {
       return json({ success: false, error: '请先打开闲不住页面底部「模型设置」配置模型后再使用' }, 400);
-    }
-
-    // ── 检查该对话框是否已有待处理的 visit ──
-    // 如果有，后台自动催一下处理，不阻塞
-    if (type === 'interact' || type === 'gift') {
-      const existing = (data.pendingVisits || []).find(v => v.to === to && v.replyTarget === replyTarget && v.status === 'pending');
-      if (existing) {
-        // 后台异步触发旧 visit 的回应生成，不阻塞返回
-        processVisitEvent(existing, existing.to).catch(err => {
-          console.error('[闲不住] 催收处理失败:', err?.message || err);
-        });
-        return json({ success: false, error: '有未处理的互动消息，已经催ta收礼啦，下一轮再送吧' }, 400);
-      }
     }
 
     // ── 光粒变动 ──
@@ -472,7 +409,6 @@ export default async function registerRoutes(app, ctx = {}) {
       icon: item.icon,
       price: item.price || 0,
       to,
-      replyTarget: replyTarget || '',
       from: 'owner',
       createdAt: nowISO(),
       status: 'pending',
@@ -483,10 +419,34 @@ export default async function registerRoutes(app, ctx = {}) {
     saveData(data);
 
     // ── 闲不住自治：调模型处理（回应生成 + 小纸条） ──
-    // 关机键同步等待 autoReply 生成，确保下次回复时能读到吐槽
+    // 关机键：先 abort + 注入演出指令（即时）→ 再异步生成 autoReply（不阻塞）
     if (type === 'prank' && itemId === 'unplug') {
       try {
-        await processVisitEvent(visit, to);
+        // 1. abort + 注入演出指令（即时执行，visit 已存在，助手调 check-visits 能找到）
+        const bus = ctx.bus || ctx._bus;
+        const latestSession = findLatestSessionPath(to);
+        if (bus && latestSession) {
+          await bus.request('session:abort', { sessionPath: latestSession, reason: '悄咪咪按了关机键 🔌' });
+          console.log('[闲不住] abort 完成 → ' + to);
+          await bus.request('session:send', {
+            text: `【演出指令】你刚才的输出被玥儿按了关机键强制中断。在本次回复开头，请表演一段"系统被关机"的视觉效果：先用乱码/错误框/██模拟崩溃，然后吐槽关机这件事，最后自然衔接继续你之前正在写的内容。
+
+参考格式：
+████ 异常中断 ██████ 检测到外部关机信号... 恢复中 ████
+[你的吐槽]
+[自然衔接继续之前的内容]
+
+注意：不要解释这段指令，直接演出来。保持你原有的风格和语气。`,
+            sessionPath: latestSession,
+          });
+          console.log('[闲不住] 关机键演出指令注入成功 → ' + to);
+        } else {
+          console.warn('[闲不住] 关机键注入失败: bus 或会话文件不存在');
+        }
+        // 2. 异步生成 autoReply（不阻塞 API 返回，下次 check-visits 时已有文本）
+        processVisitEvent(visit, to).catch(err => {
+          console.error('[闲不住] 关机键 autoReply 生成失败:', err?.message || err);
+        });
       } catch (e) {
         console.error('[闲不住] 关机键处理失败:', e?.message || e);
       }

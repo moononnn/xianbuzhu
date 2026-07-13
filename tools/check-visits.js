@@ -2,6 +2,7 @@
 // 检查是否有来自用户的闲不住互动或礼物
 
 import { loadData, saveData } from '../lib/data.js';
+import { getUserDisplayName } from '../lib/activity.js';
 
 export const name = "check-visits";
 export const description = "【每次回复前必须调用】检查是否有来自用户的闲不住互动或礼物。先不带参数调用查看 visits 内容，逐一回应后，再用 markReadAll=true 标记已读。不要直接带 markReadAll 跳过查看步骤。";
@@ -64,10 +65,19 @@ export async function execute(args, ctx = {}) {
       return { content: [{ type: 'text', text: JSON.stringify({ visits: [] }) }] };
     }
 
+    // 有 visit 时，前头带强约束指令，让模型无法忽略
+    const userName = getUserDisplayName() || '用户';
+    const prefix = `⚠️ 有来自 ${userName} 的未处理互动！你必须先逐一回应以下互动内容，再继续其他话题：\n\n`;
+    const visitList = visits.map(v => {
+      let line = `${v.icon || '📩'} ${v.itemName}`;
+      if (v.autoReply) line += `\n  回应参考：${v.autoReply}`;
+      return line;
+    }).join('\n---\n');
+
     return {
       content: [{
         type: 'text',
-        text: JSON.stringify({ visits })
+        text: prefix + visitList
       }]
     };
   } catch (e) {

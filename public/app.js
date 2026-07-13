@@ -67,7 +67,7 @@
   var state = {
     jar: 0, newAvailable: 0, sectionTitle: '',
     partners: [], shopItems: [], interactItems: [], prankItems: [],
-    sessions: {}, currentTab: 'interact',
+    currentTab: 'interact',
   };
   var currentAction = null;
 
@@ -78,6 +78,30 @@
     el.textContent = msg;
     document.body.appendChild(el);
     setTimeout(function() { el.remove(); }, 2500);
+  }
+
+  // ─── 持久 Toast（手动控制显隐和内容）───
+  var _persistentToast = null;
+  function showPersistentToast(msg, type) {
+    clearPersistentToast();
+    var el = document.createElement('div');
+    el.className = 'toast toast-persist' + (type ? ' ' + type : '');
+    el.textContent = msg;
+    document.body.appendChild(el);
+    _persistentToast = el;
+    return el;
+  }
+  function updatePersistentToast(msg, type) {
+    if (_persistentToast) {
+      _persistentToast.textContent = msg;
+      _persistentToast.className = 'toast toast-persist' + (type ? ' ' + type : '');
+    }
+  }
+  function clearPersistentToast() {
+    if (_persistentToast) {
+      _persistentToast.remove();
+      _persistentToast = null;
+    }
   }
 
   // ─── 渲染 ───
@@ -186,7 +210,6 @@
     html += '<div class="modal">';
     html += '<h3 id="modal-title"></h3>';
     html += '<div class="modal-section"><label>送给谁？</label><select class="modal-select" id="modal-target"></select></div>';
-    html += '<div class="modal-section"><label>在哪个对话框？</label><select class="modal-select" id="modal-session"></select></div>';
     html += '<div class="modal-actions">';
     html += '<button class="modal-btn cancel" onclick="window._tbClose()">取消</button>';
     html += '<button class="modal-btn confirm" id="modal-confirm" onclick="window._tbConfirm()">确认</button>';
@@ -579,12 +602,6 @@
     }
   }
 
-  async function loadSessions() {
-    try {
-      var data = await api('/api/sessions');
-      state.sessions = data.groups || {};
-    } catch (e) {}
-  }
 
   // ─── 领取光粒 ───
   window._tbClaim = async function() {
@@ -611,11 +628,9 @@
   // ─── 弹窗 ───
   window._tbOpen = async function(type, itemId, itemName, icon) {
     currentAction = { type: type, itemId: itemId, itemName: itemName, icon: icon };
-    await loadSessions();
 
     var title = $('#modal-title');
     var target = $('#modal-target');
-    var session = $('#modal-session');
     var confirm = $('#modal-confirm');
     var overlay = $('#modal-overlay');
 
@@ -645,9 +660,6 @@
     }
     target.innerHTML = targetHtml;
 
-    updateSessions(target.value);
-    target.onchange = function() { updateSessions(this.value); };
-
     overlay.classList.add('show');
   };
 
@@ -671,21 +683,6 @@
     return pad(d.getMonth() + 1) + '/' + pad(d.getDate());
   }
 
-  function updateSessions(agentId) {
-    var sel = $('#modal-session');
-    var group = state.sessions[agentId];
-    var html = '';
-    if (group && group.sessions && group.sessions.length > 0) {
-      for (var i = 0; i < group.sessions.length; i++) {
-        var s = group.sessions[i];
-        var ago = timeAgo(s.lastTs);
-        html += '<option value="' + escapeHtml(s.id) + '">' + escapeHtml(s.label) + (ago ? ' · ' + ago : '') + '</option>';
-      }
-    } else {
-      html = '<option value="">暂无会话</option>';
-    }
-    sel.innerHTML = html;
-  }
 
   window._tbClose = function() {
     $('#modal-overlay').classList.remove('show');
@@ -696,17 +693,17 @@
     if (!currentAction) return;
 
     var target = $('#modal-target').value;
-    var session = $('#modal-session').value;
-
-    if (!target || !session) {
-      toast('请选择助手和会话', 'error');
+    if (!target) {
+      toast('请选择助手', 'error');
       return;
     }
 
     try {
-      // 关机键需要等待，先给用户反馈
+      // 恶作剧需要等待，用持久 toast 显示进度
       if (currentAction.type === 'prank' && currentAction.itemId === 'unplug') {
-        toast('⏳ 正在关机...');
+        showPersistentToast('⏳ 正在关机...');
+      } else if (currentAction.type === 'prank' && currentAction.itemId === 'brainrot') {
+        showPersistentToast('⏳ 正在想说什么怪话...');
       }
       var data = await api('/api/visit', {
         method: 'POST',
@@ -714,7 +711,6 @@
           type: currentAction.type,
           itemId: currentAction.itemId,
           to: target,
-          replyTarget: session,
         }),
       });
 
@@ -722,21 +718,48 @@
         state.jar = data.jar;
         if (currentAction.type === 'prank') {
           if (currentAction.itemId === 'unplug') {
-            toast('🔌 关机！');
+            updatePersistentToast('🔌 已经关机啦！');
+            setTimeout(clearPersistentToast, 3000);
           } else if (currentAction.itemId === 'brainrot') {
-            toast('🧠 已发送怪话');
+            if (data.injected) {
+              clearPersistentToast();
+              toast('🧠 怪话已送达！');
+              // 强制刷新对话框视图，让用户看到注入的怪话
+              try {
+                if (window.parent && window.parent !== window) {
+                  window.parent.postMessage({ type: 'interject', text: '' }, '*');
+                  window.parent.postMessage({
+                    protocol: 'hana.plugin.ui', version: 1,
+                    kind: 'request', type: 'session.refresh',
+                  }, '*');
+                }
+              } catch (e) {}
+              setTimeout(clearPersistentToast, 2000);
+            } else if (data.brainrot) {
+              // 注入失败，显示文本让用户看到
+              clearPersistentToast();
+              toast('🧠 ' + data.brainrot);
+            } else {
+              clearPersistentToast();
+            }
+          } else {
+            clearPersistentToast();
           }
         } else if (currentAction.type === 'gift') {
+          clearPersistentToast();
           toast(currentAction.icon + ' 已送出');
         } else {
+          clearPersistentToast();
           toast(currentAction.icon + ' 已发送');
         }
         window._tbClose();
         render();
       } else {
+        clearPersistentToast();
         toast(data.error || '操作失败', 'error');
       }
     } catch (e) {
+      clearPersistentToast();
       toast('网络错误', 'error');
     }
   };
@@ -834,6 +857,63 @@
     } catch (e) {
       toast('❌ 网络错误：' + (e.message || '未知'), 'error');
     }
+  }
+
+  // ─── 插话：把文本填入主对话框并触发发送 ───
+  function injectIntoDialog(text) {
+    if (window.parent && window.parent !== window) {
+      // 方法1：postMessage 协议（Hana 插件标准通信）
+      try {
+        window.parent.postMessage({
+          protocol: 'hana.plugin.ui', version: 1,
+          kind: 'request', type: 'interject',
+          text: text,
+        }, '*');
+      } catch (e) {
+        console.error('[闲不住] 协议 postMessage 失败:', e);
+      }
+      // 方法1b：简洁格式的 interject 消息
+      try {
+        window.parent.postMessage({ type: 'interject', text: text }, '*');
+      } catch (e) {
+        console.error('[闲不住] 简洁 postMessage 失败:', e);
+      }
+    }
+
+    // 方法2：尝试直接访问父窗口 DOM（同源时可用）
+    try {
+      var doc = window.parent ? window.parent.document : document;
+      if (doc) {
+        var editor = doc.querySelector('.ProseMirror');
+        if (editor) {
+          editor.innerHTML = '';
+          var p = doc.createElement('p');
+          p.textContent = text;
+          editor.appendChild(p);
+          editor.dispatchEvent(new Event('input', { bubbles: true }));
+          setTimeout(function() {
+            var sendBtn = doc.querySelector('button[class*="send" i], button[class*="interject" i], [data-testid="send"]');
+            if (!sendBtn) {
+              var allBtns = doc.querySelectorAll('button');
+              for (var i = 0; i < allBtns.length; i++) {
+                var btn = allBtns[i];
+                if (btn.textContent.includes('发送') || btn.textContent.includes('插话') || btn.textContent.includes('Send') || btn.textContent.includes('Steer')) {
+                  sendBtn = btn;
+                  break;
+                }
+              }
+            }
+            if (sendBtn) sendBtn.click();
+          }, 100);
+          return;
+        }
+      }
+    } catch (e) {
+      console.error('[闲不住] DOM 注入失败:', e);
+    }
+
+    // 方法3：注入失败，展示文本让用户手动复制
+    toast('🧠 没自动插进去，怪话内容：' + text, 'error');
   }
 
   // ─── 启动 ───
