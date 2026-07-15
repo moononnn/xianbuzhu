@@ -1,7 +1,7 @@
 // 闲不住 — check-visits 工具
 // 检查是否有来自用户的闲不住互动或礼物
 
-import { loadData, saveData } from '../lib/data.js';
+import { loadData, saveData, getAffectionStage } from '../lib/data.js';
 import { getUserDisplayName } from '../lib/activity.js';
 
 export const name = "check-visits";
@@ -64,7 +64,30 @@ export async function execute(args, ctx = {}) {
     });
 
     if (visits.length === 0) {
-      return { content: [{ type: 'text', text: JSON.stringify({ visits: [] }) }] };
+      // 没有 visit 时也返回当前助手的变量状态
+      let emptyMood = '';
+      if (currentAgent) {
+        const vars = data.partnerConfig?.[currentAgent]?.variables;
+        if (vars) {
+          const stage = getAffectionStage(vars.affection);
+          const energyL = vars.energy >= 70 ? '精力充沛' : vars.energy >= 40 ? '还行' : vars.energy >= 20 ? '有点累' : '累坏了';
+          const moodL = vars.mood >= 76 ? '心情很好' : vars.mood >= 51 ? '心情平稳' : vars.mood >= 26 ? '不太好' : '心情很差';
+          emptyMood = ` (精力${vars.energy} ${energyL}，心情${vars.mood} ${moodL}，${stage.emoji} ${stage.label})`;
+        }
+      }
+      return { content: [{ type: 'text', text: JSON.stringify({ visits: [], _mood: emptyMood }) }] };
+    }
+
+    // 构建当前助手的变量状态描述
+    let moodContext = '';
+    if (currentAgent) {
+      const vars = data.partnerConfig?.[currentAgent]?.variables;
+      if (vars) {
+        const stage = getAffectionStage(vars.affection);
+        const energyL = vars.energy >= 70 ? '精力充沛' : vars.energy >= 40 ? '还行' : vars.energy >= 20 ? '有点累' : '累坏了';
+        const moodL = vars.mood >= 76 ? '心情很好' : vars.mood >= 51 ? '心情平稳' : vars.mood >= 26 ? '不太好' : '心情很差';
+        moodContext = `\n\n你的当前状态：精力 ${vars.energy}/100（${energyL}），心情 ${vars.mood}/100（${moodL}），${stage.emoji} ${stage.label}`;
+      }
     }
 
     // 有 visit 时，前头带强约束指令，让模型无法忽略
@@ -85,7 +108,7 @@ export async function execute(args, ctx = {}) {
     return {
       content: [{
         type: 'text',
-        text: prefix + visitList
+        text: prefix + visitList + moodContext
       }]
     };
   } catch (e) {

@@ -145,15 +145,15 @@ body {
 .board-avatar-img {
   width: 30px;
   height: 30px;
-  border-radius: 5px;
   flex-shrink: 0;
-  overflow: hidden;
 }
 .board-avatar-img img {
   width: 100%;
   height: 100%;
   object-fit: cover;
   display: block;
+  border-radius: 5px;
+  overflow: hidden;
 }
 .board-info {
   flex: 1;
@@ -172,7 +172,93 @@ body {
   text-overflow: ellipsis;
   line-height: 1.3;
   margin-top: 1px;
+  cursor: default;
 }
+
+/* ── 变量展示 ── */
+.board-vars {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+}
+.var-energy {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+}
+.energy-bar-bg {
+  flex: 1;
+  height: 4px;
+  background: var(--border);
+  border-radius: 2px;
+  overflow: hidden;
+  min-width: 30px;
+}
+.energy-bar-fill {
+  height: 100%;
+  border-radius: 2px;
+  transition: width 0.3s ease;
+}
+.energy-num {
+  font-size: 10px;
+  color: var(--text-secondary);
+  min-width: 18px;
+  text-align: right;
+}
+.var-mood {
+  font-size: 14px;
+  line-height: 1;
+  cursor: default;
+}
+.var-affection {
+  font-size: 11px;
+  line-height: 1;
+  margin-left: 2px;
+  vertical-align: middle;
+  cursor: default;
+  display: inline-block;
+}
+/* 好感度爱心跳动（按阶段递增） */
+.var-affection.hb-soft {
+  animation: heartbeat-soft 2.5s ease-in-out infinite;
+}
+.var-affection.hb {
+  animation: heartbeat 1.8s ease-in-out infinite;
+}
+.var-affection.hb-fast {
+  animation: heartbeat-fast 1.2s ease-in-out infinite;
+}
+
+@keyframes heartbeat-soft {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.08); }
+}
+@keyframes heartbeat {
+  0%, 100% { transform: scale(1); }
+  15% { transform: scale(1.25); }
+  30% { transform: scale(1); }
+  45% { transform: scale(1.15); }
+  60% { transform: scale(1); }
+}
+@keyframes heartbeat-fast {
+  0%, 100% { transform: scale(1); }
+  15% { transform: scale(1.35); }
+  25% { transform: scale(1); }
+  40% { transform: scale(1.25); }
+  50% { transform: scale(1); }
+  65% { transform: scale(1.3); }
+  75% { transform: scale(1); }
+}
+.energy-icon {
+  font-size: 11px;
+  line-height: 1;
+  margin-right: 2px;
+  cursor: default;
+}
+
 .board-badge {
   font-size: 10px;
   padding: 2px 8px;
@@ -861,3 +947,118 @@ body {
   50% { box-shadow: 0 0 14px 5px rgba(244, 114, 182, 0.3); border-color: #f9a8d4; }
   100% { box-shadow: 0 0 0 0 rgba(244, 114, 182, 0.5); border-color: #f472b6; }
 }
+
+/* ── 装饰：头像框 ── */
+.board-avatar.frame-flower,
+.board-avatar-img.frame-flower {
+  position: relative;
+  box-shadow: 0 0 0 3px rgba(157, 95, 77, 0.25), 0 0 0 7px rgba(157, 95, 77, 0.08);
+}
+.board-avatar.frame-star,
+.board-avatar-img.frame-star {
+  position: relative;
+  box-shadow: 0 0 0 2px rgba(100, 149, 237, 0.35), 0 0 12px 5px rgba(100, 149, 237, 0.15);
+}
+.frame-star::after {
+  content: '✨';
+  position: absolute;
+  bottom: -6px;
+  right: -6px;
+  font-size: 14px;
+  pointer-events: none;
+  filter: drop-shadow(0 0 3px rgba(83, 125, 150, 0.6));
+  animation: twinkle 1.8s ease-in-out infinite;
+}
+.frame-star::before {
+  content: '✨';
+  position: absolute;
+  top: -6px;
+  left: -6px;
+  font-size: 14px;
+  pointer-events: none;
+  filter: drop-shadow(0 0 3px rgba(83, 125, 150, 0.6));
+  animation: twinkle 1.8s ease-in-out infinite;
+  animation-delay: 0.9s;
+}
+
+@keyframes twinkle {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.3; transform: scale(0.75); }
+}
+.frame-flower::after {
+  content: '🌸';
+  position: absolute;
+  bottom: -9px;
+  right: -9px;
+  font-size: 16px;
+  pointer-events: none;
+  animation: spin 3s linear infinite;
+}
+.frame-flower::before {
+  content: '🌸';
+  position: absolute;
+  top: -9px;
+  left: -9px;
+  font-size: 16px;
+  pointer-events: none;
+  animation: spin 3s linear infinite;
+  animation-direction: reverse;
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+/* ── 装饰：卡面背景 ── */
+.bg-warm { background: #FDF6E3; }
+.bg-cool { background: #EEF2F7; }
+
+/* ── 装饰：称号 ── */
+.title-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 1px 6px;
+  font-size: 9px;
+  border-radius: 8px;
+  background: rgba(157, 95, 77, 0.08);
+  color: #9D5F4D;
+  margin-left: 4px;
+  font-weight: 400;
+  vertical-align: middle;
+}
+
+/* ── 装饰商店 ── */
+.deco-section { margin-top: 16px; }
+.deco-section .tab-label { margin-bottom: 8px; }
+.deco-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.deco-item {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px;
+  text-align: center;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.deco-item:active { transform: scale(0.97); }
+.deco-item.locked { opacity: 0.4; cursor: not-allowed; }
+.deco-item.owned {
+  border-color: var(--active);
+  background: rgba(34, 197, 94, 0.06);
+}
+.deco-icon { font-size: 20px; margin-bottom: 4px; }
+.deco-name { font-size: 12px; font-weight: 500; }
+.deco-price { font-size: 10px; color: var(--text-secondary); margin-top: 2px; }
+.deco-buy-btn {
+  margin-top: 6px;
+  padding: 3px 10px;
+  font-size: 11px;
+  border: none;
+  border-radius: 6px;
+  background: var(--accent);
+  color: #fff;
+  cursor: pointer;
+}
+.deco-buy-btn:disabled { opacity: 0.4; cursor: not-allowed; }

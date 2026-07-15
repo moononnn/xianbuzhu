@@ -28,6 +28,8 @@ class WorkVisitPlugin {
       const oldConfig = data.partnerConfig || {};
       for (const [id, info] of Object.entries(scanned)) {
         if (oldConfig[id]?.color) info.color = oldConfig[id].color;
+        if (oldConfig[id]?.variables) info.variables = oldConfig[id].variables;
+        if (oldConfig[id]?.decorations) info.decorations = oldConfig[id].decorations;
       }
       data.partnerConfig = scanned;
       saveData(data);

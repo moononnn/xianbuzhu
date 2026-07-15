@@ -206,10 +206,24 @@ export default async function registerRoutes(app, ctx = {}) {
       const avatarPath = path.join(HANA_HOME, 'agents', id, 'avatars', 'agent.png');
       const hasAvatar = fs.existsSync(avatarPath);
 
+      // 装饰数据迁移（兼容旧格式 → 新格式）
+      var deco = info.decorations;
+      if (deco && !deco.owned) {
+        // 旧格式: { avatarFrame: 'id', cardBg: null, title: null }
+        var newDeco = { owned: { avatarFrame: [], cardBg: [], title: [] }, equipped: { avatarFrame: null, cardBg: null, title: null } };
+        if (deco.avatarFrame) { newDeco.owned.avatarFrame.push(deco.avatarFrame); newDeco.equipped.avatarFrame = deco.avatarFrame; }
+        if (deco.cardBg) { newDeco.owned.cardBg.push(deco.cardBg); newDeco.equipped.cardBg = deco.cardBg; }
+        if (deco.title) { newDeco.owned.title.push(deco.title); newDeco.equipped.title = deco.title; }
+        info.decorations = newDeco;
+        deco = newDeco;
+      }
+
       partners.push({
         id, name: info.name, color: info.color,
         active, doing,
         avatarUrl: hasAvatar ? `/api/avatar/${id}` : '',
+        variables: info.variables || null,
+        decorations: deco || { owned: { avatarFrame: [], cardBg: [], title: [] }, equipped: { avatarFrame: null, cardBg: null, title: null } },
       });
     }
 
@@ -272,6 +286,7 @@ export default async function registerRoutes(app, ctx = {}) {
       shopItems: data.shopItems || [],
       interactItems: data.interactItems || [],
       prankItems: data.prankItems || [],
+      decorationItems: data.decorationItems || [],
     });
   });
 
@@ -395,10 +410,13 @@ export default async function registerRoutes(app, ctx = {}) {
       }
       data.jar -= item.price;
       data.jar += 3; // 送礼回馈
-    } else if (type === 'interact') {
-      data.jar += 1; // 互动奖励
+    } else if (type === 'prank') {
+      const prankCost = itemId === 'unplug' ? 5 : 3;
+      if ((data.jar || 0) < prankCost) {
+        return json({ success: false, error: '光粒不够了 ✨' }, 400);
+      }
+      data.jar -= prankCost;
     }
-    // 恶作剧不涉及光粒
 
     if (!data.pendingVisits) data.pendingVisits = [];
     const visit = {
@@ -748,6 +766,120 @@ export default async function registerRoutes(app, ctx = {}) {
       console.error('[闲不住] 卸载清理失败:', e.message);
       return json({ success: false, error: e.message }, 500);
     }
+  });
+
+  // ════════════════════════════════════════
+  //  POST /api/buy-decoration — 购买装饰
+  // ════════════════════════════════════════
+  app.post('/api/buy-decoration', async (c) => {
+    const input = await readBody(c);
+    const data = loadData();
+    const { decorationId, target, text } = input;
+
+    if (!decorationId || !target) {
+      return json({ success: false, error: '缺少参数' }, 400);
+    }
+
+    const item = (data.decorationItems || []).find(i => i.id === decorationId);
+    if (!item) return json({ success: false, error: '装饰不存在' }, 400);
+
+    if ((data.jar || 0) < item.price) {
+      return json({ success: false, error: '光粒不够了 ✨' }, 400);
+    }
+
+    const partnerCfg = data.partnerConfig?.[target];
+    if (!partnerCfg) return json({ success: false, error: '助手不存在' }, 400);
+
+    // 初始化新格式装饰数据
+    if (!partnerCfg.decorations || !partnerCfg.decorations.owned) {
+      partnerCfg.decorations = { owned: { avatarFrame: [], cardBg: [], title: [] }, equipped: { avatarFrame: null, cardBg: null, title: null } };
+    }
+    const deco = partnerCfg.decorations;
+
+    if (item.type === 'title') {
+      // 称号：需要输入文字
+      if (!text) return json({ success: false, error: '请输入称号文字' }, 400);
+      // 检查是否已拥有
+      if (deco.owned.title.includes(text)) {
+        return json({ success: false, error: '已拥有该称号' }, 400);
+      }
+      deco.owned.title.push(text);
+      deco.equipped.title = text;
+    } else if (item.type === 'titleEdit') {
+      // 改称号卡：必须先拥有至少一个称号
+      if (deco.owned.title.length === 0) {
+        return json({ success: false, error: '请先购买自定义称号' }, 400);
+      }
+      if (!text) return json({ success: false, error: '请输入新的称号文字' }, 400);
+      if (deco.owned.title.includes(text)) {
+        return json({ success: false, error: '已拥有该称号' }, 400);
+      }
+      deco.owned.title.push(text);
+      deco.equipped.title = text;
+    } else {
+      // 头像框/卡面：检查是否已拥有
+      const typeKey = item.type; // 'avatarFrame' or 'cardBg'
+      if (deco.owned[typeKey] && deco.owned[typeKey].includes(item.id)) {
+        return json({ success: false, error: '已拥有该装饰' }, 400);
+      }
+      if (!deco.owned[typeKey]) deco.owned[typeKey] = [];
+      deco.owned[typeKey].push(item.id);
+      deco.equipped[typeKey] = item.id;
+    }
+
+    data.jar -= item.price;
+    saveData(data);
+
+    console.log(`[闲不住] 装饰购买成功: ${item.name} → ${target}`);
+    return json({ success: true, jar: data.jar, decorations: deco });
+  });
+
+  // ════════════════════════════════════════
+  //  POST /api/equip-decoration — 切换装饰
+  // ════════════════════════════════════════
+  app.post('/api/equip-decoration', async (c) => {
+    const input = await readBody(c);
+    const data = loadData();
+    const { target, type, itemId } = input;
+
+    if (!target || !type || !itemId) {
+      return json({ success: false, error: '缺少参数' }, 400);
+    }
+
+    const partnerCfg = data.partnerConfig?.[target];
+    if (!partnerCfg) return json({ success: false, error: '助手不存在' }, 400);
+
+    const deco = partnerCfg.decorations;
+    if (!deco?.owned?.[type] || !deco.owned[type].includes(itemId)) {
+      return json({ success: false, error: '未拥有该装饰' }, 400);
+    }
+
+    deco.equipped[type] = itemId;
+    saveData(data);
+    return json({ success: true, decorations: deco });
+  });
+
+  // ════════════════════════════════════════
+  //  POST /api/unequip-decoration — 卸下装饰
+  // ════════════════════════════════════════
+  app.post('/api/unequip-decoration', async (c) => {
+    const input = await readBody(c);
+    const data = loadData();
+    const { target, type } = input;
+
+    if (!target || !type) {
+      return json({ success: false, error: '缺少参数' }, 400);
+    }
+
+    const partnerCfg = data.partnerConfig?.[target];
+    if (!partnerCfg) return json({ success: false, error: '助手不存在' }, 400);
+
+    const deco = partnerCfg.decorations;
+    if (deco?.equipped) {
+      deco.equipped[type] = null;
+      saveData(data);
+    }
+    return json({ success: true, decorations: deco });
   });
 
   // ════════════════════════════════════════

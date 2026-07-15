@@ -148,15 +148,54 @@
     for (var i = 0; i < state.partners.length; i++) {
       var p = state.partners[i];
       var initial = p.name.charAt(0);
-      html += '<div class="board-item">';
+      // 装饰类名
+      var deco = p.decorations || {};
+      var equipped = deco.equipped || {};
+      var bgClass = '';
+      if (equipped.cardBg === 'bg_warm') bgClass = ' bg-warm';
+      else if (equipped.cardBg === 'bg_cool') bgClass = ' bg-cool';
+      var frameClass = '';
+      if (equipped.avatarFrame === 'avatar_flower') frameClass = ' frame-flower';
+      else if (equipped.avatarFrame === 'avatar_star') frameClass = ' frame-star';
+      html += '<div class="board-item' + bgClass + '">';
       if (p.avatarUrl) {
-        html += '<div class="board-avatar-img"><img src="' + BASE + p.avatarUrl + AUTH + '" alt="" onerror="this.style.display=\'none\';this.parentElement.className=\'board-avatar\';this.parentElement.style.background=\'' + p.color + '\';this.parentElement.textContent=\'' + initial + '\'"></div>';
+        html += '<div class="board-avatar-img' + frameClass + '"><img src="' + BASE + p.avatarUrl + AUTH + '" alt="" onerror="this.style.display=\'none\';this.parentElement.className=\'board-avatar' + frameClass + '\';this.parentElement.style.background=\'' + p.color + '\';this.parentElement.textContent=\'' + initial + '\'"></div>';
       } else {
-        html += '<div class="board-avatar" style="background:' + p.color + '">' + initial + '</div>';
+        html += '<div class="board-avatar' + frameClass + '" style="background:' + p.color + '">' + initial + '</div>';
       }
       html += '<div class="board-info">';
-      html += '<div class="board-name">' + p.name + '</div>';
+      html += '<div class="board-name">' + p.name;
+      // 称号（名字旁边显示）
+      if (equipped.title) {
+        html += '<span class="title-badge">' + escapeHtml(equipped.title) + '</span>';
+      }
+      // 好感度爱心（放在名字旁边）
+      if (p.variables) {
+        var affectionHeart = '\uD83E\uDD0D';
+        var aff = p.variables.affection;
+        var affectionLabel = '刚认识';
+        var heartClass = '';
+        if (aff >= 81) { affectionHeart = '\u2764\uFE0F'; affectionLabel = '亲密无间'; heartClass = ' hb-fast'; }
+        else if (aff >= 51) { affectionHeart = '\uD83D\uDC96'; affectionLabel = '关系亲近'; heartClass = ' hb'; }
+        else if (aff >= 21) { affectionHeart = '\uD83D\uDC97'; affectionLabel = '逐渐熟悉'; heartClass = ' hb-soft'; }
+        else if (aff >= 0) { affectionLabel = '初识阶段'; }
+        else { affectionLabel = '有点疏远'; }
+        html += '<span class="var-affection' + heartClass + '" title="' + affectionLabel + '">' + affectionHeart + '</span>';
+      }
+      html += '</div>';
       html += '<div class="board-doing">' + p.doing + '</div>';
+      // 变量展示
+      if (p.variables) {
+        var v = p.variables;
+        var moodEmoji = v.mood >= 76 ? '\uD83D\uDE04' : v.mood >= 51 ? '\uD83D\uDE0C' : v.mood >= 26 ? '\uD83D\uDE11' : '\uD83D\uDE29';
+        var moodLabel = v.mood >= 76 ? '心情很好' : v.mood >= 51 ? '心情平稳' : v.mood >= 26 ? '不太好' : '心情很差';
+        var energyPct = Math.max(0, Math.min(100, v.energy || 0));
+        var energyColor = energyPct >= 60 ? '#4CAF50' : energyPct >= 30 ? '#FF9800' : '#f44336';
+        html += '<div class="board-vars">';
+        html += '<div class="var-energy"><span class="energy-icon">\uD83D\uDD0B</span><div class="energy-bar-bg"><div class="energy-bar-fill" style="width:' + energyPct + '%;background:' + energyColor + '"></div></div><span class="energy-num">' + v.energy + '</span></div>';
+        html += '<span class="var-mood" title="' + moodLabel + '">' + moodEmoji + '</span>';
+        html += '</div>';
+      }
       html += '</div>';
       html += '<span class="board-badge ' + (p.active ? 'badge-on' : 'badge-off') + '">' + (p.active ? '在线' : '摸鱼') + '</span>';
       html += '</div>';
@@ -203,6 +242,23 @@
       html += '</div>';
     }
     html += '</div>';
+
+    // 装饰区
+    if (state.decorationItems && state.decorationItems.length > 0) {
+      html += '<div class="deco-section">';
+      html += '<div class="tab-label">🎨 展板装饰</div>';
+      html += '<div class="deco-grid">';
+      for (var n = 0; n < state.decorationItems.length; n++) {
+        var di = state.decorationItems[n];
+        var canBuy = state.jar >= di.price;
+        html += '<div class="deco-item' + (!canBuy ? ' locked' : '') + '" onclick="window._tbBuyDeco(\'' + di.id + '\',\'' + di.name + '\',\'' + di.icon + '\',\'' + di.type + '\',\'' + di.price + '\')">';
+        html += '<div class="deco-icon">' + di.icon + '</div>';
+        html += '<div class="deco-name">' + di.name + '</div>';
+        html += '<div class="deco-price">✨ ' + di.price + '</div>';
+        html += '</div>';
+      }
+      html += '</div></div>';
+    }
     html += '</div>';
 
     // 弹窗
@@ -210,6 +266,7 @@
     html += '<div class="modal">';
     html += '<h3 id="modal-title"></h3>';
     html += '<div class="modal-section"><label>送给谁？</label><select class="modal-select" id="modal-target"></select></div>';
+    html += '<div class="modal-section" id="modal-title-section" style="display:none"><label>称号文字</label><input class="llm-input" id="modal-title-input" placeholder="如：最佳搭档" maxlength="12"></div>';
     html += '<div class="modal-actions">';
     html += '<button class="modal-btn cancel" onclick="window._tbClose()">取消</button>';
     html += '<button class="modal-btn confirm" id="modal-confirm" onclick="window._tbConfirm()">确认</button>';
@@ -589,6 +646,7 @@
       state.shopItems = data.shopItems || [];
       state.interactItems = data.interactItems || [];
       state.prankItems = data.prankItems || [];
+      state.decorationItems = data.decorationItems || [];
       state.tip = data.tip || '';
       state.hasNotes = data.hasNotes || false;
       state.hasNewNotes = data.hasNewNotes || false;
@@ -667,6 +725,162 @@
     overlay.classList.add('show');
   };
 
+  // ─── 购买装饰 ───
+  window._tbBuyDeco = async function(decorationId, name, icon, type, price) {
+    // 称号需要输入文字
+    if (type === 'title' || type === 'titleEdit') {
+      var overlay = document.getElementById('modal-overlay');
+      var title = document.getElementById('modal-title');
+      var target = document.getElementById('modal-target');
+      var confirm = document.getElementById('modal-confirm');
+      var titleSection = document.getElementById('modal-title-section');
+      var titleInput = document.getElementById('modal-title-input');
+
+      title.textContent = icon + ' ' + name;
+      target.innerHTML = '';
+      for (var i = 0; i < state.partners.length; i++) {
+        target.innerHTML += '<option value="' + escapeHtml(state.partners[i].id) + '">' + escapeHtml(state.partners[i].name) + '</option>';
+      }
+      titleSection.style.display = '';
+      titleInput.value = '';
+      confirm.textContent = '购买 ✨' + price;
+      confirm.className = 'modal-btn confirm';
+      confirm.onclick = async function() {
+        var tid = target.value;
+        var ttext = titleInput.value.trim();
+        if (!tid) { toast('请选择助手', 'error'); return; }
+        if (!ttext) { toast('请输入称号文字', 'error'); return; }
+        var data = await api('/api/buy-decoration', {
+          method: 'POST',
+          body: JSON.stringify({ decorationId: decorationId, target: tid, text: ttext }),
+        });
+        if (data.success) {
+          state.jar = data.jar;
+          if (data.decorations) {
+            for (var i = 0; i < state.partners.length; i++) {
+              if (state.partners[i].id === tid) {
+                state.partners[i].decorations = data.decorations;
+                break;
+              }
+            }
+          }
+          toast(icon + ' ' + name + ' 购买成功！');
+          titleSection.style.display = 'none';
+          window._tbClose();
+          render();
+        } else {
+          toast(data.error || '购买失败', 'error');
+        }
+      };
+      overlay.classList.add('show');
+      return;
+    }
+
+    // 选择目标助手
+    var overlay = document.getElementById('modal-overlay');
+    var title = document.getElementById('modal-title');
+    var target = document.getElementById('modal-target');
+    var confirm = document.getElementById('modal-confirm');
+
+    title.textContent = icon + ' ' + name;
+    target.innerHTML = '';
+    for (var i = 0; i < state.partners.length; i++) {
+      target.innerHTML += '<option value="' + escapeHtml(state.partners[i].id) + '">' + escapeHtml(state.partners[i].name) + '</option>';
+    }
+
+    // 根据是否已拥有动态更新按钮
+    function updateConfirmBtn() {
+      var tid = target.value;
+      if (!tid) { confirm.textContent = '购买 ✨' + price; return; }
+      var partner = null;
+      for (var i = 0; i < state.partners.length; i++) {
+        if (state.partners[i].id === tid) { partner = state.partners[i]; break; }
+      }
+      if (!partner) { confirm.textContent = '购买 ✨' + price; return; }
+      var deco = partner.decorations || {};
+      var ownedList = deco.owned?.[type] || [];
+      var isOwned = ownedList.indexOf(decorationId) !== -1;
+      var isEquipped = deco.equipped?.[type] === decorationId;
+      if (isOwned && isEquipped) {
+        confirm.textContent = '卸下';
+        confirm.className = 'modal-btn cancel';
+      } else if (isOwned) {
+        confirm.textContent = '装备';
+        confirm.className = 'modal-btn confirm';
+      } else {
+        confirm.textContent = '购买 ✨' + price;
+        confirm.className = 'modal-btn confirm';
+      }
+    }
+    target.onchange = updateConfirmBtn;
+    updateConfirmBtn();
+
+    confirm.onclick = async function() {
+      var tid = target.value;
+      if (!tid) { toast('请选择助手', 'error'); return; }
+      var partner = null;
+      for (var i = 0; i < state.partners.length; i++) {
+        if (state.partners[i].id === tid) { partner = state.partners[i]; break; }
+      }
+      var deco = partner ? (partner.decorations || {}) : {};
+      var ownedList = deco.owned?.[type] || [];
+      var isOwned = ownedList.indexOf(decorationId) !== -1;
+      var isEquipped = deco.equipped?.[type] === decorationId;
+
+      if (isOwned && isEquipped) {
+        // 卸下
+        var uData = await api('/api/unequip-decoration', {
+          method: 'POST',
+          body: JSON.stringify({ target: tid, type: type }),
+        });
+        if (uData.success) {
+          if (uData.decorations && partner) {
+            partner.decorations = uData.decorations;
+          }
+          toast('已卸下 ' + name);
+          window._tbClose();
+          render();
+        } else {
+          toast(uData.error || '卸下失败', 'error');
+        }
+      } else if (isOwned) {
+        // 装备
+        var eData = await api('/api/equip-decoration', {
+          method: 'POST',
+          body: JSON.stringify({ target: tid, type: type, itemId: decorationId }),
+        });
+        if (eData.success) {
+          if (eData.decorations && partner) {
+            partner.decorations = eData.decorations;
+          }
+          toast('已装备 ' + name);
+          window._tbClose();
+          render();
+        } else {
+          toast(eData.error || '装备失败', 'error');
+        }
+      } else {
+        // 购买
+        var data = await api('/api/buy-decoration', {
+          method: 'POST',
+          body: JSON.stringify({ decorationId: decorationId, target: tid }),
+        });
+        if (data.success) {
+          state.jar = data.jar;
+          if (data.decorations && partner) {
+            partner.decorations = data.decorations;
+          }
+          toast(icon + ' ' + name + ' 购买成功！');
+          window._tbClose();
+          render();
+        } else {
+          toast(data.error || '购买失败', 'error');
+        }
+      }
+    };
+    overlay.classList.add('show');
+  };
+
   function timeAgo(ts) {
     if (!ts) return '';
     var d = new Date(ts);
@@ -690,6 +904,8 @@
 
   window._tbClose = function() {
     $('#modal-overlay').classList.remove('show');
+    var titleSection = document.getElementById('modal-title-section');
+    if (titleSection) titleSection.style.display = 'none';
     currentAction = null;
   };
 
