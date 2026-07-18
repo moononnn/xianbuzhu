@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { loadData, saveData, nextId, todayStr, getToday, calcLightParticles, randomIdle, nowISO, randomTip, findLatestSessionPath } from '../lib/data.js';
+import { loadData, saveData, nextId, todayStr, getToday, calcLightParticles, randomIdle, nowISO, randomTip, findLatestSessionPath, getRechargeTip, getRechargeAutoReply, isRechargedToday, markRechargedToday } from '../lib/data.js';
 import { getAvailableModels, getLLMConfig, saveLLMConfig, processVisitEvent, callLLM, generateBrainrot, generateCrashReply, fetchCustomModels } from '../lib/llm.js';
 import { getPartnerConfig, getPartnerIds } from '../lib/config.js';
 import { scanTodayActivity, getUserDisplayName } from '../lib/activity.js';
@@ -224,6 +224,7 @@ export default async function registerRoutes(app, ctx = {}) {
         avatarUrl: hasAvatar ? `/api/avatar/${id}` : '',
         variables: info.variables || null,
         decorations: deco || { owned: { avatarFrame: [], cardBg: [], title: [] }, equipped: { avatarFrame: null, cardBg: null, title: null } },
+        recharged: isRechargedToday(data, id),
       });
     }
 
@@ -283,6 +284,9 @@ export default async function registerRoutes(app, ctx = {}) {
       hasNewNotes,
       showNoteGuide,
       pendingPartners: [...new Set((data.pendingVisits || []).filter(v => v.status === 'pending').map(v => v.to))],
+      pendingDetails: (data.pendingVisits || [])
+        .filter(v => v.status === 'pending' && v.type !== 'recharge')
+        .map(v => ({ id: v.id, to: v.to, type: v.type, itemId: v.itemId, itemName: v.itemName, icon: v.icon, createdAt: v.createdAt })),
       shopItems: data.shopItems || [],
       interactItems: data.interactItems || [],
       prankItems: data.prankItems || [],
@@ -475,6 +479,126 @@ export default async function registerRoutes(app, ctx = {}) {
       visitId: visit.id,
       jar: data.jar,
       item: { id: item.id, icon: item.icon, name: item.name, type },
+    });
+  });
+
+  // ════════════════════════════════════════
+  //  POST /api/recharge — 充电（消耗 50 光粒，体力回满）
+  // ════════════════════════════════════════
+  app.post('/api/recharge', async (c) => {
+    const input = await readBody(c);
+    const data = loadData();
+    const { to } = input;
+
+    if (!to) return json({ success: false, error: '缺少助手 ID' }, 400);
+
+    // 检查今天是否已充过
+    if (isRechargedToday(data, to)) {
+      return json({ success: false, error: '今天已经充过啦 ⚡', alreadyRecharged: true }, 400);
+    }
+
+    // 检查光粒
+    const RECHARGE_COST = 50;
+    if ((data.jar || 0) < RECHARGE_COST) {
+      return json({ success: false, error: '光粒不够了 ✨' }, 400);
+    }
+
+    // 检查助手是否存在
+    const partnerCfg = data.partnerConfig?.[to];
+    if (!partnerCfg) return json({ success: false, error: '助手不存在' }, 400);
+
+    // 扣光粒
+    data.jar -= RECHARGE_COST;
+
+    // 体力拉满
+    partnerCfg.variables.energy = 100;
+
+    // 标记今天已充
+    markRechargedToday(data, to);
+
+    // 生成随机提示和 autoReply
+    const tip = getRechargeTip();
+    const autoReplyText = getRechargeAutoReply();
+
+    // 存一条 recharge 类型的 pendingVisit（供 check-visits 带回）
+    if (!data.pendingVisits) data.pendingVisits = [];
+    const visit = {
+      id: nextId(),
+      type: 'recharge',
+      itemId: 'recharge',
+      itemName: '充电',
+      icon: '⚡',
+      price: 0,
+      to,
+      from: 'owner',
+      createdAt: nowISO(),
+      status: 'pending',
+      autoReply: autoReplyText,
+    };
+    data.pendingVisits.push(visit);
+
+    saveData(data);
+
+    return json({
+      success: true,
+      jar: data.jar,
+      energy: 100,
+      tip,
+      autoReply: autoReplyText,
+    });
+  });
+
+  // ════════════════════════════════════════
+  //  POST /api/remind — 催收未处理互动/礼物
+  // ════════════════════════════════════════
+  app.post('/api/remind', async (c) => {
+    const input = await readBody(c);
+    const data = loadData();
+    const { to } = input;
+
+    if (!to) return json({ success: false, error: '缺少助手 ID' }, 400);
+
+    // 找到该助手的 pending 互动/礼物（不含 recharge）
+    const pendingVisits = (data.pendingVisits || [])
+      .filter(v => v.to === to && v.status === 'pending' && v.type !== 'recharge');
+
+    if (pendingVisits.length === 0) {
+      return json({ success: false, error: '没有待处理的事件' }, 400);
+    }
+
+    // 刷新每个 pending visit 的 autoReply
+    for (const visit of pendingVisits) {
+      try {
+        await processVisitEvent(visit, to);
+      } catch (e) {
+        console.error('[闲不住] 催收刷新失败:', e?.message || e);
+      }
+    }
+
+    // 主动推送到对话框
+    try {
+      const bus = ctx.bus || ctx._bus;
+      if (bus) {
+        const sessionId = await findLatestSessionId(to);
+        if (sessionId) {
+          const names = pendingVisits.map(v => `${v.icon} ${v.itemName}`).join('、');
+          const nudgeText = `📬 有 ${pendingVisits.length} 件待回应：${names}，快去看看嘛～`;
+          await bus.request('session:send', { text: nudgeText, sessionId });
+          console.log(`[闲不住] 催收推送成功 → ${to} 会话 ${sessionId}`);
+        } else {
+          console.warn(`[闲不住] 催收推送失败: 未找到 ${to} 的会话 ID`);
+        }
+      } else {
+        console.warn('[闲不住] 催收推送失败: bus 不可用');
+      }
+    } catch (e) {
+      console.error('[闲不住] 催收推送失败:', e?.message || e);
+    }
+
+    return json({
+      success: true,
+      count: pendingVisits.length,
+      items: pendingVisits.map(v => ({ id: v.id, icon: v.icon, itemName: v.itemName, type: v.type })),
     });
   });
 
@@ -944,7 +1068,7 @@ export default async function registerRoutes(app, ctx = {}) {
       });
     } catch (e) {
       console.error('[闲不住] 检查更新失败:', e.message || e);
-      return json({ success: false, error: e.message || '网络不可达' });
+      return json({ success: false, error: e.message || '网络不可达', repoUrl: 'https://github.com/moononnn/xianbuzhu' });
     }
   });
 

@@ -195,6 +195,23 @@
         html += '<div class="var-energy"><span class="energy-icon">\uD83D\uDD0B</span><div class="energy-bar-bg"><div class="energy-bar-fill" style="width:' + energyPct + '%;background:' + energyColor + '"></div></div><span class="energy-num">' + v.energy + '</span></div>';
         html += '<span class="var-mood" title="' + moodLabel + '">' + moodEmoji + '</span>';
         html += '</div>';
+        // 充电按钮
+        if (p.recharged) {
+          html += '<button class="recharge-btn recharge-done" disabled>⚡ 已充满</button>';
+        } else if (state.jar < 50) {
+          html += '<button class="recharge-btn recharge-disabled" disabled>⚡ 充电 50✨</button>';
+        } else {
+          html += '<button class="recharge-btn" onclick="window._tbRecharge(\'' + p.id + '\')">⚡ 充电 50✨</button>';
+        }
+      }
+      // 待处理互动提醒
+      var pendingForPartner = (state.pendingDetails || []).filter(function(pd) { return pd.to === p.id; });
+      if (pendingForPartner.length > 0) {
+        var pendingNames = pendingForPartner.map(function(pd) { return pd.icon + ' ' + pd.itemName; }).join('、');
+        html += '<div class="pending-reminder">';
+        html += '<span class="pending-text">📮 ' + pendingForPartner.length + ' 件待回应：' + pendingNames + '</span>';
+        html += '<button class="remind-btn" onclick="window._tbRemind(\'' + p.id + '\')">去提醒 ta</button>';
+        html += '</div>';
       }
       html += '</div>';
       html += '<span class="board-badge ' + (p.active ? 'badge-on' : 'badge-off') + '">' + (p.active ? '在线' : '摸鱼') + '</span>';
@@ -651,6 +668,7 @@
       state.hasNotes = data.hasNotes || false;
       state.hasNewNotes = data.hasNewNotes || false;
       state.showNoteGuide = data.showNoteGuide || false;
+      state.pendingDetails = data.pendingDetails || [];
 
       // 顺便获取模型配置状态，用于齿轮图标
       try {
@@ -1164,19 +1182,26 @@
     if (resultEl) resultEl.innerHTML = '<span style="color:#888">↻ 正在检查更新...</span>';
     try {
       var data = await api('/api/check-update');
+
+      function repoLink(repoUrl) {
+        var url = repoUrl || 'https://github.com/moononnn/xianbuzhu';
+        return '<div style="margin-top:8px;padding-top:6px;border-top:1px solid var(--border);font-size:11px;color:var(--text-secondary);word-break:break-all">' +
+          '也可复制链接手动下载：<br>' +
+          '<a href="' + url + '" target="_blank" style="color:var(--accent);word-break:break-all">' + url + '</a></div>';
+      }
+
       if (!data.success) {
-        if (resultEl) resultEl.innerHTML = '<span style="color:#e74c3c">❌ ' + (data.error || '检查失败') + '</span>';
+        if (resultEl) resultEl.innerHTML = '<div style="color:#e74c3c">❌ ' + (data.error || '检查失败') + '</div>' + repoLink(data.repoUrl);
         return;
       }
       if (!data.hasUpdate) {
-        if (resultEl) resultEl.innerHTML = '✅ ' + data.message;
+        if (resultEl) resultEl.innerHTML = '✅ ' + data.message + repoLink(data.repoUrl);
         return;
       }
       // 有更新：显示更新卡片
       var html = '<div style="margin-top:12px;padding:12px;background:var(--card);border-radius:8px;border:1px solid var(--border);font-size:13px">';
       html += '<div style="font-weight:600;margin-bottom:8px">🎉 ' + data.message + '</div>';
       if (data.releaseBody) {
-        // 简单渲染 release body（GitHub markdown 转纯文本）
         var body = data.releaseBody
           .replace(/^###?\s+(.+)/gm, '<strong>$1</strong>')
           .replace(/^-\s+(.+)/gm, '· $1')
@@ -1187,10 +1212,14 @@
       html += '<div style="display:flex;gap:8px">';
       html += '<a href="' + data.downloadUrl + '" class="llm-save" style="display:inline-block;text-decoration:none;padding:6px 14px;font-size:13px;background:var(--accent);color:#fff;border-radius:6px">⬇ 下载更新</a>';
       html += '<a href="' + data.updateUrl + '" target="_blank" class="llm-save" style="display:inline-block;text-decoration:none;padding:6px 14px;font-size:13px;background:var(--accent-soft);color:var(--text);border-radius:6px">查看详情 →</a>';
-      html += '</div></div>';
+      html += '</div>';
+      html += repoLink(data.repoUrl);
+      html += '</div>';
       if (resultEl) resultEl.innerHTML = html;
     } catch (e) {
-      if (resultEl) resultEl.innerHTML = '<span style="color:#e74c3c">网络错误</span>';
+      if (resultEl) resultEl.innerHTML = '<div style="color:#e74c3c">网络错误</div>' +
+        '<div style="margin-top:8px;font-size:11px;color:var(--text-secondary);word-break:break-all">也可复制链接手动下载：<br>' +
+        '<a href="https://github.com/moononnn/xianbuzhu" target="_blank" style="color:var(--accent);word-break:break-all">https://github.com/moononnn/xianbuzhu</a></div>';
       console.error('[闲不住] 检查更新:', e);
     }
   };
@@ -1202,6 +1231,54 @@
     group.classList.toggle('open');
     var arrow = header.querySelector('.notes-group-arrow');
     if (arrow) arrow.textContent = group.classList.contains('open') ? '▼' : '▶';
+  };
+
+  // ─── 充电 ───
+  window._tbRecharge = async function(partnerId) {
+    try {
+      var data = await api('/api/recharge', {
+        method: 'POST',
+        body: JSON.stringify({ to: partnerId }),
+      });
+
+      if (data.success) {
+        state.jar = data.jar;
+        // 本地更新该助手的数值，避免等重新拉取
+        for (var ri = 0; ri < state.partners.length; ri++) {
+          if (state.partners[ri].id === partnerId) {
+            state.partners[ri].recharged = true;
+            if (state.partners[ri].variables) {
+              state.partners[ri].variables.energy = 100;
+            }
+            break;
+          }
+        }
+        toast(data.tip || '⚡ 充电完成！');
+        render();
+      } else {
+        toast(data.error || '充电失败', 'error');
+      }
+    } catch (e) {
+      toast('网络错误', 'error');
+    }
+  };
+
+  // ─── 催收 ───
+  window._tbRemind = async function(partnerId) {
+    try {
+      var data = await api('/api/remind', {
+        method: 'POST',
+        body: JSON.stringify({ to: partnerId }),
+      });
+
+      if (data.success) {
+        toast('已去提醒 ' + data.count + ' 件待回应 📨');
+      } else {
+        toast(data.error || '提醒失败', 'error');
+      }
+    } catch (e) {
+      toast('网络错误', 'error');
+    }
   };
 
   loadData();

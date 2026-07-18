@@ -276,6 +276,72 @@ body {
   color: var(--text-secondary);
 }
 
+/* ── 充电按钮 ── */
+.recharge-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-top: 6px;
+  padding: 3px 10px;
+  font-size: 11px;
+  border: none;
+  border-radius: 6px;
+  background: var(--accent);
+  color: #fff;
+  cursor: pointer;
+  transition: opacity 0.2s;
+  white-space: nowrap;
+}
+.recharge-btn:hover {
+  opacity: 0.85;
+}
+.recharge-btn.recharge-done {
+  background: var(--border);
+  color: var(--text-secondary);
+  cursor: default;
+}
+.recharge-btn.recharge-disabled {
+  background: var(--border);
+  color: var(--text-secondary);
+  cursor: default;
+  opacity: 0.6;
+}
+
+/* ── 待处理提醒 ── */
+.pending-reminder {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  padding: 4px 8px;
+  background: rgba(255, 193, 7, 0.08);
+  border-radius: 6px;
+  font-size: 11px;
+  flex-wrap: wrap;
+}
+.pending-text {
+  color: var(--text-secondary);
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.remind-btn {
+  padding: 2px 8px;
+  font-size: 11px;
+  border: none;
+  border-radius: 5px;
+  background: var(--accent);
+  color: #fff;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: opacity 0.2s;
+}
+.remind-btn:hover {
+  opacity: 0.85;
+}
+
 /* ── Tab 切换 ── */
 .tabbar {
   display: flex;
