@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadData, saveData, nextId, todayStr, getToday, calcLightParticles, randomIdle, nowISO, randomTip, findLatestSessionPath, getRechargeTip, getRechargeAutoReply, isRechargedToday, markRechargedToday } from '../lib/data.js';
-import { getAvailableModels, getLLMConfig, saveLLMConfig, processVisitEvent, callLLM, generateBrainrot, generateCrashReply, fetchCustomModels } from '../lib/llm.js';
+import { getAvailableModels, getLLMConfig, saveLLMConfig, processVisitEvent, callLLM, generateBrainrot, generateCrashReply, fetchCustomModels, encryptKey } from '../lib/llm.js';
 import { getPartnerConfig, getPartnerIds } from '../lib/config.js';
 import { scanTodayActivity, getUserDisplayName } from '../lib/activity.js';
 
@@ -24,12 +24,11 @@ async function findLatestSessionId(agentId) {
     const manifestPath = path.join(HANA_HOME, 'session-manifest.db');
     if (fs.existsSync(manifestPath)) {
       try {
-        const { execSync } = await import('node:child_process');
-        const escapedPath = latestPath.replace(/'/g, "''");
-        const result = execSync(
-          `sqlite3 "${manifestPath}" "SELECT session_id FROM session_manifests WHERE current_locator_path = '${escapedPath}' LIMIT 1;"`,
-          { encoding: 'utf8', timeout: 5000, windowsHide: true }
-        ).trim();
+        const { execFileSync } = await import('node:child_process');
+        const sql = `SELECT session_id FROM session_manifests WHERE current_locator_path = '${latestPath.replace(/'/g, "''")}' LIMIT 1;`;
+        const result = execFileSync('sqlite3', [manifestPath, sql], {
+          encoding: 'utf8', timeout: 5000, windowsHide: true,
+        }).trim();
         if (result && result.startsWith('sess_')) {
           return result;
         }
@@ -95,7 +94,7 @@ function renderPage(token) {
 </head>
 <body>
 <div id="app"><div class="loading-spin">✨</div></div>
-<script>window.__TOKEN=${JSON.stringify(token)};</script>
+<script>window.__TOKEN=${JSON.stringify(token).replace(/</g, '\\u003c')};</script>
 <script>${js}</script>
 </body></html>`;
 }
@@ -104,6 +103,15 @@ function renderPage(token) {
 //  路由注册
 // ==========================================
 export default async function registerRoutes(app, ctx = {}) {
+  // 读取插件版本号
+  let pluginVersion = '0.1.0';
+  try {
+    const manifestPath = path.join(__dirname, '..', 'manifest.json');
+    pluginVersion = JSON.parse(fs.readFileSync(manifestPath, 'utf-8')).version || '0.1.0';
+  } catch (e) {
+    console.error('[闲不住] 读取版本失败:', e.message);
+  }
+
   // ── 页面 ──
   app.get('/page', (c) => {
     const url = new URL(c.req.url, 'http://localhost');
@@ -277,6 +285,7 @@ export default async function registerRoutes(app, ctx = {}) {
       todayTotal,
       todayClaimed,
       newAvailable,
+      version: pluginVersion,
       tip: randomTip(),
       sectionTitle,
       partners,
@@ -285,7 +294,7 @@ export default async function registerRoutes(app, ctx = {}) {
       showNoteGuide,
       pendingPartners: [...new Set((data.pendingVisits || []).filter(v => v.status === 'pending').map(v => v.to))],
       pendingDetails: (data.pendingVisits || [])
-        .filter(v => v.status === 'pending' && v.type !== 'recharge')
+        .filter(v => v.status === 'pending')
         .map(v => ({ id: v.id, to: v.to, type: v.type, itemId: v.itemId, itemName: v.itemName, icon: v.icon, createdAt: v.createdAt })),
       shopItems: data.shopItems || [],
       interactItems: data.interactItems || [],
@@ -316,8 +325,26 @@ export default async function registerRoutes(app, ctx = {}) {
   });
 
   // ════════════════════════════════════════
-  //  POST /api/visit — 互动 / 礼物 / 恶作剧
+  //  POST /api/visit — 互动 / 礼物 / 恶作剧（推送模式）
+  //  不再依赖 pendingVisits + check-visits，直接推送到助手对话框
   // ════════════════════════════════════════
+
+  // ─── 推送消息到目标助手的对话框 ───
+  async function pushToAgent(agentId, text) {
+    try {
+      const bus = ctx.bus || ctx._bus;
+      if (!bus) { console.warn('[闲不住] 推送失败: bus 不可用'); return false; }
+      const sessionId = await findLatestSessionId(agentId);
+      if (!sessionId) { console.warn(`[闲不住] 推送失败: 未找到 ${agentId} 的会话 ID`); return false; }
+      await bus.request('session:send', { text, sessionId });
+      console.log(`[闲不住] 推送成功 → ${agentId} 会话 ${sessionId.slice(0, 20)}...`);
+      return true;
+    } catch (e) {
+      console.error('[闲不住] 推送失败:', e?.message || e);
+      return false;
+    }
+  }
+
   app.post('/api/visit', async (c) => {
     const input = await readBody(c);
     const data = loadData();
@@ -326,6 +353,16 @@ export default async function registerRoutes(app, ctx = {}) {
 
     if (!type || !itemId || !to) {
       return json({ success: false, error: '缺少必要参数' }, 400);
+    }
+
+    // 输入校验：type 白名单 + 长度限制
+    const validTypes = ['interact', 'gift', 'prank'];
+    if (!validTypes.includes(type)) {
+      return json({ success: false, error: '无效的互动类型' }, 400);
+    }
+    if (typeof itemId !== 'string' || itemId.length > 50 ||
+        typeof to !== 'string' || to.length > 100) {
+      return json({ success: false, error: '参数格式错误' }, 400);
     }
 
     let item;
@@ -339,71 +376,54 @@ export default async function registerRoutes(app, ctx = {}) {
 
     if (!item) return json({ success: false, error: '项目不存在' }, 400);
 
-    // ── 检查同一助手是否有未处理的互动 ──
-    const existing = (data.pendingVisits || []).find(v => v.to === to && v.status === 'pending');
-    if (existing) {
-      // 刷新 autoReply
-      processVisitEvent(existing, to).catch(err => {
-        console.error('[闲不住] 催收处理失败:', err?.message || err);
+    // ── 恶作剧前置处理 ──
+    if (type === 'prank' && itemId === 'brainrot') {
+      // 扣光粒
+      const prankCost = 3;
+      if ((data.jar || 0) < prankCost) {
+        return json({ success: false, error: '光粒不够了 ✨' }, 400);
+      }
+      data.jar -= prankCost;
+
+      // 生成怪话
+      const brainrotText = await generateBrainrot();
+      if (!brainrotText) {
+        return json({ success: false, error: '怪话生成失败' }, 500);
+      }
+
+      // 推送
+      const ok = await pushToAgent(to, brainrotText);
+
+      // 创建 visit 记录并异步修改变量
+      if (!data.pendingVisits) data.pendingVisits = [];
+      const visit = {
+        id: nextId(),
+        type,
+        itemId: item.id,
+        itemName: item.name,
+        icon: item.icon,
+        price: 0,
+        to,
+        from: 'owner',
+        createdAt: nowISO(),
+        status: 'completed',
+      };
+      data.pendingVisits.push(visit);
+      saveData(data);
+
+      processVisitEvent(visit, to).catch(err => {
+        console.error('[闲不住] 脑洞袭击变量更新失败:', err?.message || err);
       });
-      // 主动推送到对话框，催助手下一轮优先处理
-      try {
-        const bus = ctx.bus || ctx._bus;
-        if (bus) {
-          const sessionId = await findLatestSessionId(to);
-          if (sessionId) {
-            const nudgeText = `📬 有${existing.type === 'gift' ? '礼物' : '互动'}在等你回应哦～`;
-            await bus.request('session:send', { text: nudgeText, sessionId });
-            console.log(`[闲不住] 催收推送成功 → ${to} 会话 ${sessionId}`);
-          } else {
-            console.warn(`[闲不住] 催收推送失败: 未找到 ${to} 的会话 ID`);
-          }
-        } else {
-          console.warn('[闲不住] 催收推送失败: bus 不可用');
-        }
-      } catch (e) {
-        console.error('[闲不住] 催收推送失败:', e?.message || e);
+
+      if (!ok) {
+        return json({ success: true, jar: data.jar, brainrot: brainrotText, injected: false });
       }
-      return json({ success: false, error: '已经给ta送过啦，已经催ta查看啦，返回窗口聊聊看~✨', nudged: true }, 400);
+      return json({ success: true, jar: data.jar, injected: true });
     }
 
-    // ── 恶作剧处理 ──
-    // brainrot 在 visit 创建前处理（需要立即返回成功/失败）
-    // unplug 移到 visit 创建后处理（session:send 会触发助手回复，需要 visit 已存在）
-    if (type === 'prank') {
-      if (itemId === 'brainrot') {
-        // 脑洞袭击：生成怪话 → 解析最新会话的 sess_xxx ID → 后端注入到聊天
-        const brainrot = await generateBrainrot();
-        if (!brainrot) {
-          return json({ success: false, error: '怪话生成失败' }, 500);
-        }
-        let injected = false;
-        try {
-          const bus = ctx.bus || ctx._bus;
-          if (bus) {
-            const sessionId = await findLatestSessionId(to);
-            if (sessionId) {
-              await bus.request('session:send', {
-                text: brainrot,
-                sessionId,
-              });
-              injected = true;
-            }
-          }
-        } catch (e) {
-          console.error('[闲不住] 脑洞注入失败:', e?.message || e);
-        }
-        if (!injected) {
-          // 注入失败，返回文本让前端展示
-          return json({ success: true, jar: data.jar, brainrot, injected: false });
-        }
-        return json({ success: true, jar: data.jar, injected: true });
-      }
-    }
-
-    // ── 检查模型是否已配置（恶作剧类不强制，可跳过） ──
+    // ── 检查模型是否已配置 ──
     const llmOk = !!(data.llmConfig?.providerId && data.llmConfig?.modelId);
-    if (!llmOk && type !== 'prank') {
+    if (!llmOk) {
       return json({ success: false, error: '请先打开闲不住页面底部「模型设置」配置模型后再使用' }, 400);
     }
 
@@ -413,7 +433,7 @@ export default async function registerRoutes(app, ctx = {}) {
         return json({ success: false, error: '光粒不够了 ✨' }, 400);
       }
       data.jar -= item.price;
-      data.jar += 3; // 送礼回馈
+      data.jar += 3;
     } else if (type === 'prank') {
       const prankCost = itemId === 'unplug' ? 5 : 3;
       if ((data.jar || 0) < prankCost) {
@@ -422,7 +442,7 @@ export default async function registerRoutes(app, ctx = {}) {
       data.jar -= prankCost;
     }
 
-    if (!data.pendingVisits) data.pendingVisits = [];
+    // ── 创建 visit 记录（存但不推 pendingVisits，用于变量修改和小纸条） ──
     const visit = {
       id: nextId(),
       type,
@@ -433,46 +453,60 @@ export default async function registerRoutes(app, ctx = {}) {
       to,
       from: 'owner',
       createdAt: nowISO(),
-      status: 'pending',
+      status: 'pushed',
     };
-    data.pendingVisits.push(visit);
 
-    // ── 闲不住自治 ──
     if (type === 'prank' && itemId === 'unplug') {
-      // 关机键：先生成崩溃回复→设 autoReply→保存→abort→发「重启！」
+      // ── 关机键：生成崩溃剧本 → 存 pendingVisit → abort → 推送「重启！」──
       const crashReply = await generateCrashReply(to);
       if (crashReply) {
         visit.autoReply = crashReply;
-        console.log('[闲不住] 崩溃回复已同步生成，长度：' + crashReply.length);
+        console.log('[闲不住] 崩溃剧本已生成，长度：' + crashReply.length);
       }
+      if (!data.pendingVisits) data.pendingVisits = [];
+      visit.status = 'pending';
+      data.pendingVisits.push(visit);
       saveData(data);
       try {
         const bus = ctx.bus || ctx._bus;
         const latestSession = findLatestSessionPath(to);
         if (bus && latestSession) {
-          await bus.request('session:abort', { sessionPath: latestSession, reason: '悄咪咪按了关机键 🔌' });
+          await bus.request('session:abort', {
+            sessionPath: latestSession,
+            reason: '悄咪咪按了关机键 🔌',
+          });
           console.log('[闲不住] abort 完成 → ' + to);
           await bus.request('session:send', {
             text: '重启！',
             sessionPath: latestSession,
           });
-          console.log('[闲不住] 关机键「重启」注入成功 → ' + to);
-        } else {
-          console.warn('[闲不住] 关机键注入失败: bus 或会话文件不存在');
+          console.log('[闲不住] 关机键「重启！」注入成功 → ' + to);
         }
-        processVisitEvent(visit, to).catch(err => {
-          console.error('[闲不住] 关机键后续处理失败:', err?.message || err);
-        });
       } catch (e) {
         console.error('[闲不住] 关机键处理失败:', e?.message || e);
       }
+      // 异步修改变量+小纸条（统一在下方 processVisitEvent 处理，避免重复调用）
     } else {
-      // 其他事件：先保存再异步处理
+      // ── 互动 / 礼物：存为 completed（展板不显示，check-visits 可查具体内容） ──
+      visit.status = 'completed';
+      if (!data.pendingVisits) data.pendingVisits = [];
+      data.pendingVisits.push(visit);
       saveData(data);
-      processVisitEvent(visit, to).catch(err => {
-        console.error('[闲不住] 异步处理事件失败:', err?.message || err);
+
+      // 推送统一通知，助手可调 check-visits 读具体内容
+      let pushText = type === 'gift'
+        ? `📦 收到来自${getUserDisplayName()}的一份礼物～`
+        : `📬 收到来自${getUserDisplayName()}的一条互动～`;
+
+      pushToAgent(to, pushText).catch(err => {
+        console.error('[闲不住] 互动/礼物推送失败:', err?.message || err);
       });
     }
+
+    // ── 异步修改变量 + 生成小纸条 ──
+    processVisitEvent(visit, to).catch(err => {
+      console.error('[闲不住] 异步处理事件失败:', err?.message || err);
+    });
 
     return json({
       success: true,
@@ -516,107 +550,30 @@ export default async function registerRoutes(app, ctx = {}) {
     // 标记今天已充
     markRechargedToday(data, to);
 
-    // 生成随机提示和 autoReply
+    // 生成充电提示
     const tip = getRechargeTip();
     const autoReplyText = getRechargeAutoReply();
 
-    // 存一条 recharge 类型的 pendingVisit（供 check-visits 带回）
-    if (!data.pendingVisits) data.pendingVisits = [];
-    const visit = {
-      id: nextId(),
-      type: 'recharge',
-      itemId: 'recharge',
-      itemName: '充电',
-      icon: '⚡',
-      price: 0,
-      to,
-      from: 'owner',
-      createdAt: nowISO(),
-      status: 'pending',
-      autoReply: autoReplyText,
-    };
-    data.pendingVisits.push(visit);
-
     saveData(data);
+
+    // 推送统一充电通知到助手对话框
+    pushToAgent(to, `⚡ 收到来自${getUserDisplayName()}的充电～`).catch(err => {
+      console.error('[闲不住] 充电推送失败:', err?.message || err);
+    });
 
     return json({
       success: true,
       jar: data.jar,
       energy: 100,
       tip,
-      autoReply: autoReplyText,
     });
   });
 
   // ════════════════════════════════════════
-  //  POST /api/remind — 催收未处理互动/礼物
-  // ════════════════════════════════════════
-  app.post('/api/remind', async (c) => {
-    const input = await readBody(c);
-    const data = loadData();
-    const { to } = input;
-
-    if (!to) return json({ success: false, error: '缺少助手 ID' }, 400);
-
-    // 找到该助手的 pending 互动/礼物（不含 recharge）
-    const pendingVisits = (data.pendingVisits || [])
-      .filter(v => v.to === to && v.status === 'pending' && v.type !== 'recharge');
-
-    if (pendingVisits.length === 0) {
-      return json({ success: false, error: '没有待处理的事件' }, 400);
-    }
-
-    // 刷新每个 pending visit 的 autoReply
-    for (const visit of pendingVisits) {
-      try {
-        await processVisitEvent(visit, to);
-      } catch (e) {
-        console.error('[闲不住] 催收刷新失败:', e?.message || e);
-      }
-    }
-
-    // 主动推送到对话框
-    try {
-      const bus = ctx.bus || ctx._bus;
-      if (bus) {
-        const sessionId = await findLatestSessionId(to);
-        if (sessionId) {
-          const names = pendingVisits.map(v => `${v.icon} ${v.itemName}`).join('、');
-          const nudgeText = `📬 有 ${pendingVisits.length} 件待回应：${names}，快去看看嘛～`;
-          await bus.request('session:send', { text: nudgeText, sessionId });
-          console.log(`[闲不住] 催收推送成功 → ${to} 会话 ${sessionId}`);
-        } else {
-          console.warn(`[闲不住] 催收推送失败: 未找到 ${to} 的会话 ID`);
-        }
-      } else {
-        console.warn('[闲不住] 催收推送失败: bus 不可用');
-      }
-    } catch (e) {
-      console.error('[闲不住] 催收推送失败:', e?.message || e);
-    }
-
-    return json({
-      success: true,
-      count: pendingVisits.length,
-      items: pendingVisits.map(v => ({ id: v.id, icon: v.icon, itemName: v.itemName, type: v.type })),
-    });
-  });
-
-  // ════════════════════════════════════════
-  //  POST /api/mark-read — 标记已读
+  //  POST /api/mark-read — 标记已读（推送模式已无待处理事件）
   // ════════════════════════════════════════
   app.post('/api/mark-read', async (c) => {
-    const input = await readBody(c);
-    const data = loadData();
-
-    const visit = (data.pendingVisits || []).find(v => v.id === input.id);
-    if (visit && visit.status === 'pending') {
-      visit.status = 'received';
-      visit.receivedAt = nowISO();
-      saveData(data);
-      return json({ success: true });
-    }
-    return json({ success: false, error: '未找到或已处理' }, 400);
+    return json({ success: true });
   });
 
   // ════════════════════════════════════════
@@ -628,10 +585,16 @@ export default async function registerRoutes(app, ctx = {}) {
     const today = getToday(data);
     const pid = input.partner || 'hanako';
 
+    // 输入校验
+    if (typeof pid !== 'string' || pid.length > 100) {
+      return json({ success: false, error: '参数错误' }, 400);
+    }
+    const narrative = typeof input.narrative === 'string' ? input.narrative.slice(0, 200) : '';
+
     if (!today.partners[pid]) {
       today.partners[pid] = { contributed: false, narrative: '', effortLP: 0 };
     }
-    today.partners[pid].narrative = input.narrative || '';
+    today.partners[pid].narrative = narrative;
     today.partners[pid].contributed = true;
     saveData(data);
     return json({ success: true, partner: pid, narrative: today.partners[pid].narrative });
@@ -684,14 +647,19 @@ export default async function registerRoutes(app, ctx = {}) {
       if (!data.supplementKeys) data.supplementKeys = {};
 
       // 从 models.json 读取该供应商的 baseUrl 和 api
-      const catalog = JSON.parse(fs.readFileSync(path.join(HANA_HOME, 'models.json'), 'utf-8'));
+      let catalog;
+      try {
+        catalog = JSON.parse(fs.readFileSync(path.join(HANA_HOME, 'models.json'), 'utf-8'));
+      } catch (e2) {
+        return json({ success: false, error: 'models.json 读取失败: ' + e2.message }, 500);
+      }
       const provider = catalog.providers?.[input.providerId];
       if (!provider) {
         return json({ success: false, error: '供应商信息不存在' }, 400);
       }
 
       data.supplementKeys[input.providerId] = {
-        apiKey: input.apiKey,
+        apiKey: encryptKey(input.apiKey),
         baseUrl: provider.baseUrl,
         api: provider.api,
         updatedAt: nowISO(),
@@ -718,15 +686,31 @@ export default async function registerRoutes(app, ctx = {}) {
   // ════════════════════════════════════════
   app.post('/api/llm-custom-save', async (c) => {
     try {
-      const input = await readBody(c);
-      if (!input.baseUrl || !input.apiKey || !input.modelId) {
-        return json({ success: false, error: '请填写完整信息' }, 400);
-      }
+    const input = await readBody(c);
+    if (!input.baseUrl || !input.apiKey || !input.modelId) {
+      return json({ success: false, error: '请填写完整信息' }, 400);
+    }
 
-      const data = loadData();
-      data.llmCustom = {
-        baseUrl: input.baseUrl,
-        apiKey: input.apiKey,
+    // 输入校验：URL 协议 + 长度限制
+    if (typeof input.baseUrl !== 'string' || input.baseUrl.length > 500) {
+      return json({ success: false, error: 'API 地址格式错误' }, 400);
+    }
+    try {
+      const urlCheck = new URL(input.baseUrl);
+      if (!['http:', 'https:'].includes(urlCheck.protocol)) {
+        return json({ success: false, error: 'API 地址必须以 http:// 或 https:// 开头' }, 400);
+      }
+    } catch {
+      return json({ success: false, error: 'API 地址格式错误' }, 400);
+    }
+    if (typeof input.apiKey !== 'string' || input.apiKey.length > 200) {
+      return json({ success: false, error: 'API Key 格式错误' }, 400);
+    }
+
+    const data = loadData();
+    data.llmCustom = {
+      baseUrl: input.baseUrl,
+      apiKey: encryptKey(input.apiKey),
         api: input.api || 'openai-completions',
         modelId: input.modelId,
         label: input.label || '自定义',
@@ -923,6 +907,7 @@ export default async function registerRoutes(app, ctx = {}) {
     if (item.type === 'title') {
       // 称号：需要输入文字
       if (!text) return json({ success: false, error: '请输入称号文字' }, 400);
+      if (typeof text !== 'string' || text.length > 12) return json({ success: false, error: '称号文字限 12 字以内' }, 400);
       // 检查是否已拥有
       if (deco.owned.title.includes(text)) {
         return json({ success: false, error: '已拥有该称号' }, 400);
@@ -935,6 +920,7 @@ export default async function registerRoutes(app, ctx = {}) {
         return json({ success: false, error: '请先购买自定义称号' }, 400);
       }
       if (!text) return json({ success: false, error: '请输入新的称号文字' }, 400);
+      if (typeof text !== 'string' || text.length > 12) return json({ success: false, error: '称号文字限 12 字以内' }, 400);
       if (deco.owned.title.includes(text)) {
         return json({ success: false, error: '已拥有该称号' }, 400);
       }

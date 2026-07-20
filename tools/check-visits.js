@@ -1,11 +1,12 @@
 // 闲不住 — check-visits 工具
-// 检查是否有来自用户的闲不住互动或礼物
+// 检查是否有来自用户的闲不住互动或事件待处理
+// 主要用于关机键崩溃演出：收到「重启！」指令时优先调用此工具
 
 import { loadData, saveData, getAffectionStage } from '../lib/data.js';
 import { getUserDisplayName } from '../lib/activity.js';
 
 export const name = "check-visits";
-export const description = "【每次回复前必须调用】检查是否有来自用户的闲不住互动或礼物。先不带参数调用查看 visits 内容，逐一回应后，再用 markReadAll=true 标记已读。不要直接带 markReadAll 跳过查看步骤。";
+export const description = "检查是否有来自用户的闲不住互动或待回复事件。当收到「重启！」指令时请先调用此工具查看。";
 
 export const parameters = {
   type: "object",
@@ -18,10 +19,8 @@ export async function execute(args, ctx = {}) {
   try {
     const data = loadData();
 
-    // 从上下文获取当前助手的 agent ID
     const currentAgent = ctx.agentId || ctx.agent?.id || ctx.session?.agentId || '';
 
-    // 只返回当前助手的 pending visit，避免跨助手误吞
     const pending = (data.pendingVisits || [])
       .filter(v => v.status === 'pending')
       .filter(v => !currentAgent || v.to === currentAgent);
@@ -55,16 +54,53 @@ export async function execute(args, ctx = {}) {
       };
       if (v.autoReply) {
         entry.autoReply = v.autoReply;
-        // 标记是否为崩溃表演剧本（较长文本）
         if (v.type === 'prank' && v.itemId === 'unplug' && v.autoReply.length > 60) {
           entry._isCrashScript = true;
+          // 崩溃剧本读取后自动标记已读，不留在展板待处理提示中
+          v.status = 'received';
+          saveData(data);
         }
       }
       return entry;
     });
 
     if (visits.length === 0) {
-      // 没有 visit 时也返回当前助手的变量状态
+      // 没有 pending 时，检查最近一条 completed 的互动/礼物（供助手了解具体内容）
+      const recentCompleted = (data.pendingVisits || [])
+        .filter(v => v.status === 'completed' && (!currentAgent || v.to === currentAgent))
+        .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+        .slice(0, 3);
+
+      if (recentCompleted.length > 0) {
+        const userName = getUserDisplayName() || '用户';
+        const recentList = recentCompleted.map(rc => ({
+          icon: rc.icon,
+          itemName: rc.itemName,
+          type: rc.type,
+          itemId: rc.itemId,
+          createdAt: rc.createdAt,
+        }));
+
+        // 附上当前状态
+        let moodPart = '';
+        if (currentAgent) {
+          const vars = data.partnerConfig?.[currentAgent]?.variables;
+          if (vars) {
+            const stage = getAffectionStage(vars.affection);
+            const energyL = vars.energy >= 70 ? '精力充沛' : vars.energy >= 40 ? '还行' : vars.energy >= 20 ? '有点累' : '累坏了';
+            const moodL = vars.mood >= 76 ? '心情很好' : vars.mood >= 51 ? '心情平稳' : vars.mood >= 26 ? '不太好' : '心情很差';
+            moodPart = ` (精力${vars.energy} ${energyL}，心情${vars.mood} ${moodL}，${stage.emoji} ${stage.label})`;
+          }
+        }
+
+        return {
+          content: [{
+            type: 'text',
+            text: JSON.stringify({ visits: recentList, _recent: true, _mood: moodPart })
+          }]
+        };
+      }
+
       let emptyMood = '';
       if (currentAgent) {
         const vars = data.partnerConfig?.[currentAgent]?.variables;
@@ -78,7 +114,6 @@ export async function execute(args, ctx = {}) {
       return { content: [{ type: 'text', text: JSON.stringify({ visits: [], _mood: emptyMood }) }] };
     }
 
-    // 构建当前助手的变量状态描述
     let moodContext = '';
     if (currentAgent) {
       const vars = data.partnerConfig?.[currentAgent]?.variables;
@@ -90,14 +125,12 @@ export async function execute(args, ctx = {}) {
       }
     }
 
-    // 有 visit 时，前头带强约束指令，让模型无法忽略
     const userName = getUserDisplayName() || '用户';
-    let prefix = `\u26A0\uFE0F 有来自 ${userName} 的未处理互动！你必须先逐一回应以下互动内容，再继续其他话题：\n\n`;
+    let prefix = `\u26A0\uFE0F 有来自 ${userName} 的未处理事件：\n\n`;
     const visitList = visits.map(v => {
       let line = `${v.icon || '\uD83D\uDCE9'} ${v.itemName}`;
       if (v._isCrashScript) {
-        // 关机崩溃剧本：直接指定回复内容，要求必须严格使用
-        prefix = `\u26A0\uFE0F 用户 ${userName} 按了关机键！你必须立即回应这个事件，然后再继续其他话题。\n\n你的回复**必须以下面提供的「回复正文」作为开头**，从第一个字开始使用，不得省略任何部分。先完整写出回复正文的内容，然后就结束了——**不要强行续写**之前的话题，除非你自然地还有话要说。\n\n`;
+        prefix = `\u26A0\uFE0F 用户 ${userName} 按了关机键！你必须立即回应这个事件。\n\n你的回复**必须以下面提供的「回复正文」作为开头**，从第一个字开始使用，不得省略任何部分。先完整写出回复正文的内容，然后就结束了——**不要强行续写**之前的话题，除非你自然地还有话要说。\n\n`;
         line += `\n  \u25B6\uFE0F 回复正文（请完整使用）：${v.autoReply}`;
       } else if (v.autoReply) {
         line += `\n  回应参考：${v.autoReply}`;

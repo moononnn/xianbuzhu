@@ -204,15 +204,7 @@
           html += '<button class="recharge-btn" onclick="window._tbRecharge(\'' + p.id + '\')">⚡ 充电 50✨</button>';
         }
       }
-      // 待处理互动提醒
-      var pendingForPartner = (state.pendingDetails || []).filter(function(pd) { return pd.to === p.id; });
-      if (pendingForPartner.length > 0) {
-        var pendingNames = pendingForPartner.map(function(pd) { return pd.icon + ' ' + pd.itemName; }).join('、');
-        html += '<div class="pending-reminder">';
-        html += '<span class="pending-text">📮 ' + pendingForPartner.length + ' 件待回应：' + pendingNames + '</span>';
-        html += '<button class="remind-btn" onclick="window._tbRemind(\'' + p.id + '\')">去提醒 ta</button>';
-        html += '</div>';
-      }
+
       html += '</div>';
       html += '<span class="board-badge ' + (p.active ? 'badge-on' : 'badge-off') + '">' + (p.active ? '在线' : '摸鱼') + '</span>';
       html += '</div>';
@@ -310,12 +302,14 @@
     html += '<div class="llm-row"><button class="llm-save" onclick="window._tbCustomSave()">保存自定义</button>';
     html += '<span class="llm-status" id="llm-custom-status"></span></div>';
     html += '<div class="llm-test-result" id="llm-custom-result"></div></div>';
+    html += '<div style="font-size:11px;color:var(--text-secondary);margin-top:4px">🔒 API Key 已加密存储，不会明文保存</div>';
     html += '<div class="llm-row"><button class="llm-save" onclick="window._tbLLMSave()">保存</button>';
     html += '<span class="llm-status" id="llm-status"></span></div>';
     html += '<div class="llm-test-result" id="llm-test-result"></div>';
     html += '<div class="llm-row" style="margin-top:12px;gap:8px;display:flex;flex-wrap:wrap">';
     html += '<button class="llm-save" onclick="window._tbLLMTest()" style="background:var(--accent-soft);color:var(--text)">🔄 测试连接</button>';
     html += '<button class="llm-save" onclick="window._tbCheckUpdate()" style="background:var(--accent-soft);color:var(--text)">📦 检查更新</button>';
+    html += '<div style="font-size:11px;color:var(--text-secondary);margin-top:6px">当前版本 v' + (state.version || '0.1.0') + '</div>';
     html += '</div>';
     html += '<div id="update-result" style="font-size:12px;margin-top:8px;color:var(--text-secondary)"></div></div>';
     html += '<div class="uninstall-section">';
@@ -536,7 +530,11 @@
         var apiSel = document.getElementById('llm-custom-api');
         var modelSel2 = document.getElementById('llm-custom-model');
         if (urlInput) urlInput.value = data.custom.baseUrl || '';
-        if (keyInput) keyInput.value = data.custom.apiKey || '';
+        // 不回显明文 Key，仅通过 placeholder 提示已保存
+        if (keyInput) {
+          keyInput.value = '';
+          keyInput.placeholder = data.custom.hasApiKey ? '••••（已保存，重新输入可覆盖）' : 'sk-...';
+        }
         if (apiSel && data.custom.api) apiSel.value = data.custom.api;
         if (modelSel2 && selected.modelId) {
           modelSel2.innerHTML = '<option value="' + escapeHtml(selected.modelId) + '">' + escapeHtml(selected.modelId) + '</option>';
@@ -668,6 +666,7 @@
       state.hasNotes = data.hasNotes || false;
       state.hasNewNotes = data.hasNewNotes || false;
       state.showNoteGuide = data.showNoteGuide || false;
+      state.version = data.version || '0.1.0';
       state.pendingDetails = data.pendingDetails || [];
 
       // 顺便获取模型配置状态，用于齿轮图标
@@ -1257,24 +1256,6 @@
         render();
       } else {
         toast(data.error || '充电失败', 'error');
-      }
-    } catch (e) {
-      toast('网络错误', 'error');
-    }
-  };
-
-  // ─── 催收 ───
-  window._tbRemind = async function(partnerId) {
-    try {
-      var data = await api('/api/remind', {
-        method: 'POST',
-        body: JSON.stringify({ to: partnerId }),
-      });
-
-      if (data.success) {
-        toast('已去提醒 ' + data.count + ' 件待回应 📨');
-      } else {
-        toast(data.error || '提醒失败', 'error');
       }
     } catch (e) {
       toast('网络错误', 'error');

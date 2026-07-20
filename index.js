@@ -39,125 +39,68 @@ class WorkVisitPlugin {
     console.error('[闲不住] 初始化伙伴配置失败:', e.message);
   }
 
-  // ── 注入闲不住协议到每个助手的 identity.md（幂等） ──
-  const IDENTITY_PROTOCOL_MARKER = '<!-- work-visit-protocol-v3 -->';
-  const IDENTITY_PROTOCOL_BLOCK = `${IDENTITY_PROTOCOL_MARKER}
-
-## 闲不住强制协议
-
-每次你准备回复一条消息之前，**必须**调用 work-visit_check-visits 工具（不带参数），查看是否有待回应的互动/礼物/恶作剧。
-
-返回的 visits 中可能包含 **autoReply** 字段（闲不住已预先生成的回应文本），在回复中自然地融入即可。如果没有 autoReply 字段，说明闲不住还在处理中，正常回应即可。
-
-如果返回空，照常回复即可。
-
-### 特殊关键词触发
-当用户说「重启！」时，这表示用户在你回复中途按了关机键恶作剧。**务必**先调用 work-visit_check-visits 查看是否有「演出剧本」需要你直接作为回复内容演出来。
-
-全部处理完毕后，用 markReadAll=true 标记已读后再继续作答。
-
-这条规则由"闲不住"插件管理，卸载插件时会自动清理。请勿手动删除此区块。
-
-<!-- /work-visit-protocol-v3 -->
-`;
-
-  function injectProtocolToAgent(agentDir) {
-    const identityPath = path.join(agentDir, 'identity.md');
-    try {
-      // 跳过没有 identity.md 的 agent（避免误创建）
-      if (!fs.existsSync(identityPath)) return false;
-      let content = fs.readFileSync(identityPath, 'utf-8');
-
-      // 先删除所有旧的闲不住协议块（v1/v2/v3），避免多版本共存污染系统提示
-      content = content.replace(
-        /<!-- work-visit-protocol-v\d+ -->[\s\S]*?<!-- \/work-visit-protocol-v\d+ -->\s*/g,
-        ''
-      );
-
-      // 如果清理后已经包含当前版本标记（实际上不会，因为刚被删了），跳过
-      if (content.includes(IDENTITY_PROTOCOL_MARKER)) return false;
-
-      // 协议放在 identity.md 最前面，确保在系统提示中尽早出现
-      const newContent = IDENTITY_PROTOCOL_BLOCK + '\n' + content;
-      const tmp = identityPath + '.tmp';
-      fs.writeFileSync(tmp, newContent, 'utf-8');
-      fs.renameSync(tmp, identityPath);
-      return true;
-    } catch (e) {
-      console.error(`[闲不住] 注入 ${path.basename(agentDir)} 协议失败:`, e.message);
-      return false;
-    }
-  }
-
-  function injectProtocolToAllAgents() {
-    try {
-      const agentsDir = path.join(HANA_HOME, 'agents');
-      if (!fs.existsSync(agentsDir)) return;
+  // ── 启动时清理所有残留（兼容旧版本） ──
+  try {
+    const agentsDir = path.join(HANA_HOME, 'agents');
+    if (fs.existsSync(agentsDir)) {
       const entries = fs.readdirSync(agentsDir, { withFileTypes: true });
-      let total = 0, patched = 0;
       for (const entry of entries) {
         if (!entry.isDirectory()) continue;
         if (!fs.existsSync(path.join(agentsDir, entry.name, 'config.yaml'))) continue;
-        total++;
-        if (injectProtocolToAgent(path.join(agentsDir, entry.name))) patched++;
-      }
-      if (patched > 0) {
-        console.log(`[闲不住] 已为 ${patched}/${total} 个助手注入闲不住协议到 identity.md`);
-      } else if (total > 0) {
-        console.log(`[闲不住] ${total} 个助手的 identity.md 已含闲不住协议`);
-      }
-    } catch (e) {
-      console.error('[闲不住] 批量注入协议失败:', e.message);
-    }
-  }
 
-  injectProtocolToAllAgents();
-
-  // ── 安装闲不住 skill 并启用给所有助手 ──
-  try {
-    const skillDir = path.join(HANA_HOME, 'skills', 'work-visit');
-    const skillFile = path.join(skillDir, 'SKILL.md');
-
-    // 如果全局 skill 不存在，从插件内置的 skills/ 自动复制
-    if (!fs.existsSync(skillFile)) {
-      const builtinSkill = path.join(__dirname, 'skills', 'work-visit', 'SKILL.md');
-      if (fs.existsSync(builtinSkill)) {
-        if (!fs.existsSync(skillDir)) fs.mkdirSync(skillDir, { recursive: true });
-        fs.copyFileSync(builtinSkill, skillFile);
-        console.log('[闲不住] 已自动安装 skill 到 ' + skillDir);
-      }
-    }
-
-    if (fs.existsSync(skillFile)) {
-      // 给所有助手启用 work-visit skill
-      const agentsDir = path.join(HANA_HOME, 'agents');
-      if (fs.existsSync(agentsDir)) {
-        const entries = fs.readdirSync(agentsDir, { withFileTypes: true });
-        let enabled = 0;
-        for (const entry of entries) {
-          if (!entry.isDirectory()) continue;
-          const configPath = path.join(agentsDir, entry.name, 'config.yaml');
-          if (!fs.existsSync(configPath)) continue;
-          try {
-            let cfg = fs.readFileSync(configPath, 'utf-8');
-            if (cfg.includes('work-visit')) continue;
-            // 在 skills.enabled 列表中添加
-            cfg = cfg.replace(
-              /(skills:\s*\n\s+enabled:\s*\n)/,
-              '$1    - work-visit\n'
-            );
-            fs.writeFileSync(configPath, cfg, 'utf-8');
-            enabled++;
-          } catch (e) {
-            console.error(`[闲不住] ${entry.name} skill 启用失败:`, e.message);
+        // 清理 config.yaml 中的 work-visit skill 引用
+        const configPath = path.join(agentsDir, entry.name, 'config.yaml');
+        try {
+          let cfg = fs.readFileSync(configPath, 'utf-8');
+          const newCfg = cfg.replace(/^\s+- work-visit\n/gm, '');
+          if (newCfg !== cfg) {
+            fs.writeFileSync(configPath, newCfg, 'utf-8');
+            console.log(`[闲不住] 已清理 ${entry.name} config.yaml 中的 work-visit 引用`);
           }
+        } catch (e) {
+          console.error(`[闲不住] 清理 ${entry.name} config.yaml 失败:`, e.message);
         }
-        if (enabled > 0) console.log(`[闲不住] 已为 ${enabled} 个助手启用 work-visit skill`);
+
+        // 清理 identity.md 中的旧协议块，替换为极简协议（仅保留关机键所需）
+        const identityPath = path.join(agentsDir, entry.name, 'identity.md');
+        try {
+          if (fs.existsSync(identityPath)) {
+            let content = fs.readFileSync(identityPath, 'utf-8');
+            // 删除所有旧的闲不住协议块（v1/v2/v3）
+            let newContent = content.replace(
+              /<!-- work-visit-protocol-v\d+ -->[\s\S]*?<!-- \/work-visit-protocol-v\d+ -->\s*/g,
+              ''
+            );
+            // 删除可能残留的极简协议（防重复）
+            newContent = newContent.replace(
+              /<!-- work-visit-minimal -->[\s\S]*?<!-- \/work-visit-minimal -->\s*/g,
+              ''
+            );
+            // 注入极简协议：仅针对「重启！」场景，不侵入正常对话
+            const MINIMAL_PROTOCOL = '<!-- work-visit-minimal -->\n如果用户发了「重启！」：先调 work-visit_check-visits 工具查看有无演出剧本，按剧本内容回复。\n<!-- /work-visit-minimal -->\n\n';
+            newContent = MINIMAL_PROTOCOL + newContent;
+            fs.writeFileSync(identityPath, newContent, 'utf-8');
+            console.log(`[闲不住] 已替换 ${entry.name} identity.md 协议为极简版（仅重启指令）`);
+          }
+        } catch (e) {
+          console.error(`[闲不住] 更新 ${entry.name} identity.md 失败:`, e.message);
+        }
       }
     }
+
+    // 删除全局 skill 目录（如果存在）
+    const globalSkillDir = path.join(HANA_HOME, 'skills', 'work-visit');
+    if (fs.existsSync(globalSkillDir)) {
+      fs.rmSync(globalSkillDir, { recursive: true, force: true });
+      console.log('[闲不住] 已删除全局 skill 目录: ' + globalSkillDir);
+    }
+
+    console.log('[闲不住] 残留清理完成');
   } catch (e) {
-    console.error('[闲不住] skill 安装失败:', e.message);
+    console.error('[闲不住] 残留清理失败:', e.message);
   }
+
+  console.log('[闲不住] 推送模式已启用，所有互动/礼物/恶作剧走系统推送');
   }
 }
 
