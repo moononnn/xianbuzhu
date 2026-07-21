@@ -135,7 +135,7 @@
       html += '<div class="note-guide-icon">💌</div>';
       html += '<div class="note-guide-body">';
       html += '<div class="note-guide-title">收到了一张小纸条！</div>';
-      html += '<div class="note-guide-desc">你送给助手的每一次互动和礼物，它们都悄悄记在心里了。偶尔会写张小纸条，塞回给你——就像朋友之间的小秘密。</div>';
+      html += '<div class="note-guide-desc">你送给助手的每一次互动和礼物，每个助手都悄悄记在心里了。偶尔会写张小纸条，塞回给你——就像朋友之间的小秘密。</div>';
       html += '<div class="note-guide-actions">';
       html += '<button class="note-guide-btn" onclick="window._tbShowNotes();window._tbDismissNoteGuide()">去看看 📝</button>';
       html += '<span class="note-guide-dismiss" onclick="window._tbDismissNoteGuide()">知道了</span>';
@@ -164,7 +164,7 @@
         html += '<div class="board-avatar' + frameClass + '" style="background:' + p.color + '">' + initial + '</div>';
       }
       html += '<div class="board-info">';
-      html += '<div class="board-name">' + p.name;
+      html += '<div class="board-name">' + escapeHtml(p.name);
       // 称号（名字旁边显示）
       if (equipped.title) {
         html += '<span class="title-badge">' + escapeHtml(equipped.title) + '</span>';
@@ -183,7 +183,7 @@
         html += '<span class="var-affection' + heartClass + '" title="' + affectionLabel + '">' + affectionHeart + '</span>';
       }
       html += '</div>';
-      html += '<div class="board-doing">' + p.doing + '</div>';
+      html += '<div class="board-doing">' + escapeHtml(p.doing) + '</div>';
       // 变量展示
       if (p.variables) {
         var v = p.variables;
@@ -201,7 +201,7 @@
         } else if (state.jar < 50) {
           html += '<button class="recharge-btn recharge-disabled" disabled>⚡ 充电 50✨</button>';
         } else {
-          html += '<button class="recharge-btn" onclick="window._tbRecharge(\'' + p.id + '\')">⚡ 充电 50✨</button>';
+          html += '<button class="recharge-btn" onclick="window._tbRecharge(\'' + (p.id || '').replace(/'/g, '\\\'') + '\')">⚡ 充电 50✨</button>';
         }
       }
 
@@ -302,7 +302,7 @@
     html += '<div class="llm-row"><button class="llm-save" onclick="window._tbCustomSave()">保存自定义</button>';
     html += '<span class="llm-status" id="llm-custom-status"></span></div>';
     html += '<div class="llm-test-result" id="llm-custom-result"></div></div>';
-    html += '<div style="font-size:11px;color:var(--text-secondary);margin-top:4px">🔒 API Key 已加密存储，不会明文保存</div>';
+    html += '<div style="font-size:11px;color:var(--text-secondary);margin-top:4px">🔒 API Key 已本地混淆存储（非强加密，请勿上传 data.json）</div>';
     html += '<div class="llm-row"><button class="llm-save" onclick="window._tbLLMSave()">保存</button>';
     html += '<span class="llm-status" id="llm-status"></span></div>';
     html += '<div class="llm-test-result" id="llm-test-result"></div>';
@@ -316,7 +316,7 @@
     html += '<hr style="margin:20px 0;border-color:var(--border)">';
     html += '<details style="font-size:12px;color:var(--text-secondary)">';
     html += '<summary style="cursor:pointer;color:#e74c3c">⚠️ 彻底卸载闲不住</summary>';
-    html += '<p style="margin:8px 0">点击后清理所有闲不住残留数据，包括：助手协议注入、数据文件、skill 配置。</p>';
+    html += '<p style="margin:8px 0">点击后清理所有闲不住残留数据，包括：助手协议残留、数据文件、skill 配置。</p>';
     html += '<p style="margin:8px 0">清理后请关闭 Hana 并手动删除插件目录。</p>';
     html += '<button class="llm-save" onclick="window._tbUninstall()" style="background:#e74c3c;color:#fff">🗑️ 清理残留数据</button>';
     html += '</details></div></div></div>';
@@ -1107,7 +1107,7 @@
 
   window._tbUninstall = async function() {
     try {
-      var data = await api('/api/uninstall', { method: 'POST' });
+      var data = await api('/api/uninstall', { method: 'POST', body: JSON.stringify({ confirm: true }) });
       if (data.success) {
         toast('✅ 清理完成，请关闭 Hana 并手动删除插件目录');
       } else {

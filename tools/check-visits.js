@@ -6,7 +6,7 @@ import { loadData, saveData, getAffectionStage } from '../lib/data.js';
 import { getUserDisplayName } from '../lib/activity.js';
 
 export const name = "check-visits";
-export const description = "检查是否有来自用户的闲不住互动或待回复事件。当收到「重启！」指令时请先调用此工具查看。";
+export const description = "当收到「重启！」这两个字时，必须立即调用此工具——会有演出剧本需要读取并作为回复开头。也用于检查来自用户的闲不住互动或待回复事件。";
 
 export const parameters = {
   type: "object",

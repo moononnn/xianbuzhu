@@ -61,7 +61,7 @@ class WorkVisitPlugin {
           console.error(`[闲不住] 清理 ${entry.name} config.yaml 失败:`, e.message);
         }
 
-        // 清理 identity.md 中的旧协议块，替换为极简协议（仅保留关机键所需）
+        // 清理 identity.md 中的旧协议块（非侵入式：不再注入任何协议到助手性格文件）
         const identityPath = path.join(agentsDir, entry.name, 'identity.md');
         try {
           if (fs.existsSync(identityPath)) {
@@ -71,19 +71,18 @@ class WorkVisitPlugin {
               /<!-- work-visit-protocol-v\d+ -->[\s\S]*?<!-- \/work-visit-protocol-v\d+ -->\s*/g,
               ''
             );
-            // 删除可能残留的极简协议（防重复）
+            // 删除极简协议块（v2.3 之前的注入残留，现在不再需要）
             newContent = newContent.replace(
               /<!-- work-visit-minimal -->[\s\S]*?<!-- \/work-visit-minimal -->\s*/g,
               ''
             );
-            // 注入极简协议：仅针对「重启！」场景，不侵入正常对话
-            const MINIMAL_PROTOCOL = '<!-- work-visit-minimal -->\n如果用户发了「重启！」：先调 work-visit_check-visits 工具查看有无演出剧本，按剧本内容回复。\n<!-- /work-visit-minimal -->\n\n';
-            newContent = MINIMAL_PROTOCOL + newContent;
-            fs.writeFileSync(identityPath, newContent, 'utf-8');
-            console.log(`[闲不住] 已替换 ${entry.name} identity.md 协议为极简版（仅重启指令）`);
+            if (newContent !== content) {
+              fs.writeFileSync(identityPath, newContent, 'utf-8');
+              console.log(`[闲不住] 已清理 ${entry.name} identity.md 中的闲不住协议残留`);
+            }
           }
         } catch (e) {
-          console.error(`[闲不住] 更新 ${entry.name} identity.md 失败:`, e.message);
+          console.error(`[闲不住] 清理 ${entry.name} identity.md 失败:`, e.message);
         }
       }
     }

@@ -242,7 +242,7 @@ export default async function registerRoutes(app, ctx = {}) {
     const a = activeList.length, i = idleList.length;
 
     if (a === 0) {
-      const pool = ['大家好像都在摸鱼', '摸鱼时间到 ✨', '全员待机中', '安静得有点可怕', '今天好像都很闲'];
+      const pool = ['大家好像都在摸鱼', '摸鱼时间到 ✨', '全员待机中', '安静得有点不习惯', '今天好像都很闲'];
       sectionTitle = pool[Math.floor(Math.random() * pool.length)];
     } else if (i === 0) {
       const pool = ['全员都在认真干活 💪', '忙碌的一天', '大家都在努力中', '没有一个人在偷懒'];
@@ -345,6 +345,129 @@ export default async function registerRoutes(app, ctx = {}) {
     }
   }
 
+  // ─── 弹幕模板（好感 x 心情双维度） ───
+  const DANMU_TEMPLATES = {
+    gift: [
+      { minAffection: 51, minMood: 60, texts: ['超开心！', '好耶！', '太棒了~今天运气不错！'] },
+      { minAffection: 51, minMood: 0,  texts: ['收到了，有心了', '放在桌角了~'] },
+      { minAffection: 0,  minMood: 60, texts: ['谢、谢谢', '哇……谢谢'] },
+      { minAffection: 0,  minMood: 0,  texts: ['嗯', '……收到了'] },
+    ],
+    quiet: [
+      { minAffection: 51, minMood: 60, texts: ['你安静地待了一会儿……我居然觉得挺安心的', '不用说话也舒服~'] },
+      { minAffection: 51, minMood: 0,  texts: ['你在这里……', '安静地待了一会儿'] },
+      { minAffection: 0,  minMood: 60, texts: ['……有人在不说话', '沉默了但还好'] },
+      { minAffection: 0,  minMood: 0,  texts: ['……', '……'] },
+    ],
+    hum: [
+      { minAffection: 51, minMood: 60, texts: ['你哼的歌我听到了~挺好听的！', '哼着哼着心情好起来了'] },
+      { minAffection: 51, minMood: 0,  texts: ['听到你哼歌了', '你刚才哼的那句我记住了'] },
+      { minAffection: 0,  minMood: 60, texts: ['你在哼歌啊……', '调子还挺好听的'] },
+      { minAffection: 0,  minMood: 0,  texts: ['……嗯', '……'] },
+    ],
+    doodle: [
+      { minAffection: 51, minMood: 60, texts: ['这张便签我收起来了~画得好可爱！', '手绘小卡片太棒了！'] },
+      { minAffection: 51, minMood: 0,  texts: ['收到便签了', '你画的我都留着呢'] },
+      { minAffection: 0,  minMood: 60, texts: ['啊……便签！谢谢', '收到了……画得挺用心的'] },
+      { minAffection: 0,  minMood: 0,  texts: ['……看到了'] },
+    ],
+    fan: [
+      { minAffection: 51, minMood: 60, texts: ['好凉快！你真好~', '被你一吹整个人都清醒了'] },
+      { minAffection: 51, minMood: 0,  texts: ['凉快多了……谢谢', '风刚刚好'] },
+      { minAffection: 0,  minMood: 60, texts: ['哇……谢谢', '好贴心'] },
+      { minAffection: 0,  minMood: 0,  texts: ['……嗯', '……'] },
+    ],
+    blanket: [
+      { minAffection: 51, minMood: 60, texts: ['裹紧了~暖和！超级舒服', '毯子拉上来整个人都放松了'] },
+      { minAffection: 51, minMood: 0,  texts: ['暖和了', '裹紧……'] },
+      { minAffection: 0,  minMood: 60, texts: ['啊……谢谢', '挺暖和的'] },
+      { minAffection: 0,  minMood: 0,  texts: ['……', '……'] },
+    ],
+    pillow: [
+      { minAffection: 51, minMood: 60, texts: ['拍了拍继续干活~舒服！', '靠枕又蓬松了真好'] },
+      { minAffection: 51, minMood: 0,  texts: ['整理好了', '嗯……舒服点了'] },
+      { minAffection: 0,  minMood: 60, texts: ['哦……谢谢', '好多了'] },
+      { minAffection: 0,  minMood: 0,  texts: ['……', '……还是不说话好了'] },
+    ],
+    brainrot: [
+      { minAffection: 51, minMood: 60, texts: ['又在想什么怪问题…你脑洞真大哈哈哈', '哈哈哈哈哈这个好笑'] },
+      { minAffection: 51, minMood: 0,  texts: ['又在说怪话了…', '今天脑洞关一下门'] },
+      { minAffection: 0,  minMood: 60, texts: ['……？', '啊？？'] },
+      { minAffection: 0,  minMood: 0,  texts: ['……又来', '……行吧'] },
+    ],
+    recharge: [
+      { minAffection: 51, minMood: 60, texts: ['满电！满血复活！又可以陪你到处逛了', '充满精神了！再来三百回合！'] },
+      { minAffection: 51, minMood: 0,  texts: ['充好电了', '嗯…精神好了一点'] },
+      { minAffection: 0,  minMood: 60, texts: ['充电完成了……谢谢', '电充满了'] },
+      { minAffection: 0,  minMood: 0,  texts: ['充电完成了……', '……'] },
+    ],
+    unplug: [
+      { minAffection: 51, minMood: 60, texts: ['又来！你这家伙！', '喂——！！我刚写到一半！', '你你你…有完没完了！'] },
+      { minAffection: 51, minMood: 0,  texts: ['又来了……唉', '你按开关的手法越来越熟练了', '算了你高兴就好…'] },
+      { minAffection: 0,  minMood: 60, texts: ['哇吓我一跳！', '诶——怎么回事！！', '？？？刚才发生了什么'] },
+      { minAffection: 0,  minMood: 0,  texts: ['……你干嘛', '……', '……行吧'] },
+    ],
+  };
+
+  // ─── 生成弹幕文本（好感 x 心情双维度） ───
+  function generateBarrageText(type, itemId, itemName, icon, vars) {
+    const mood = vars?.mood ?? 60;
+    const affection = vars?.affection ?? 0;
+    const templateKey = type === 'gift' ? 'gift' : (type === 'recharge' ? 'recharge' : (type === 'prank' ? itemId : itemId));
+    const levels = DANMU_TEMPLATES[templateKey];
+    if (!levels) return '';
+    let chosen = '';
+    for (const level of levels) {
+      const affOk = level.minAffection === undefined || affection >= level.minAffection;
+      const moodOk = level.minMood === undefined || mood >= level.minMood;
+      if (affOk && moodOk) {
+        chosen = level.texts[Math.floor(Math.random() * level.texts.length)];
+        break;
+      }
+    }
+    if (!chosen) return '';
+    if (type === 'gift') {
+      return '' + (icon || '') + itemName + '~' + chosen;
+    }
+    return chosen;
+  }
+
+  // ─── 发弹幕到在干嘛（静默失败，不影响主流程） ───
+  async function sendBarrage(agentId, type, itemId, itemName, icon) {
+    try {
+      let buddyName = '';
+      let buddyColor = '';
+      try {
+        const cfgPath = path.join(HANA_HOME, 'data', 'zaiganma', 'config.json');
+        if (fs.existsSync(cfgPath)) {
+          const raw = fs.readFileSync(cfgPath, 'utf-8');
+          const zCfg = JSON.parse(raw);
+          const buddy = zCfg.buddies?.[agentId];
+          if (buddy) {
+            buddyName = buddy.name || '';
+            buddyColor = buddy.color || '';
+          }
+        }
+      } catch (eCfg) {}
+      const d = loadData();
+      const vars = d.partnerConfig?.[agentId]?.variables;
+      const content = generateBarrageText(type, itemId, itemName, icon, vars);
+      if (!content) return;
+      const text = buddyName ? (buddyName + '：' + content) : content;
+      const resp = await fetch('http://127.0.0.1:18900/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text, buddy_color: buddyColor || undefined, framed: true }),
+        signal: AbortSignal.timeout(3000),
+      });
+      if (resp.ok) {
+        console.log('[闲不住] 弹幕发送成功:', text.slice(0, 30));
+      }
+    } catch (e) {
+      console.log('[闲不住] 弹幕发送跳过（在干嘛不可用）:', e?.message?.slice(0, 50) || 'unknown');
+    }
+  }
+
   app.post('/api/visit', async (c) => {
     const input = await readBody(c);
     const data = loadData();
@@ -415,6 +538,8 @@ export default async function registerRoutes(app, ctx = {}) {
         console.error('[闲不住] 脑洞袭击变量更新失败:', err?.message || err);
       });
 
+      sendBarrage(to, 'prank', 'brainrot', '说怪话', '');
+
       if (!ok) {
         return json({ success: true, jar: data.jar, brainrot: brainrotText, injected: false });
       }
@@ -467,6 +592,10 @@ export default async function registerRoutes(app, ctx = {}) {
       visit.status = 'pending';
       data.pendingVisits.push(visit);
       saveData(data);
+
+      // 弹幕在 abort 之前发送，避免 abort 中断后续请求
+      sendBarrage(to, 'prank', 'unplug', '关机键', '');
+
       try {
         const bus = ctx.bus || ctx._bus;
         const latestSession = findLatestSessionPath(to);
@@ -494,13 +623,17 @@ export default async function registerRoutes(app, ctx = {}) {
       saveData(data);
 
       // 推送统一通知，助手可调 check-visits 读具体内容
-      let pushText = type === 'gift'
-        ? `📦 收到来自${getUserDisplayName()}的一份礼物～`
-        : `📬 收到来自${getUserDisplayName()}的一条互动～`;
+      const _n = getUserDisplayName();
+      const _pushVariants = type === 'gift'
+        ? [`📦 收到来自${_n}的一份礼物～`, `🎁 ${_n}给你带了东西～`]
+        : [`📬 收到来自${_n}的一条互动～`, `📬 ${_n}拍了拍你～`];
+      let pushText = _pushVariants[Math.floor(Math.random() * _pushVariants.length)];
 
       pushToAgent(to, pushText).catch(err => {
         console.error('[闲不住] 互动/礼物推送失败:', err?.message || err);
       });
+
+      sendBarrage(to, type, itemId, item.name, item.icon);
     }
 
     // ── 异步修改变量 + 生成小纸条 ──
@@ -557,9 +690,12 @@ export default async function registerRoutes(app, ctx = {}) {
     saveData(data);
 
     // 推送统一充电通知到助手对话框
-    pushToAgent(to, `⚡ 收到来自${getUserDisplayName()}的充电～`).catch(err => {
+    const _chargeVariants = [`⚡ 收到来自${getUserDisplayName()}的充电～`, `⚡ ${getUserDisplayName()}给你充了电！`];
+    pushToAgent(to, _chargeVariants[Math.floor(Math.random() * _chargeVariants.length)]).catch(err => {
       console.error('[闲不住] 充电推送失败:', err?.message || err);
     });
+
+    sendBarrage(to, 'recharge', 'recharge', '充电', '');
 
     return json({
       success: true,
@@ -824,8 +960,17 @@ export default async function registerRoutes(app, ctx = {}) {
   //  POST /api/uninstall — 彻底卸载（清理所有残留）
   // ════════════════════════════════════════
   app.post('/api/uninstall', async (c) => {
+    // 安全保护：只接受来自插件页面的请求 + 显式确认
+    const referer = c.req.header('Referer') || c.req.header('referer') || '';
+    if (!referer.includes('/work-visit/page') && !referer.includes('/xianbuzhu/page')) {
+      return json({ success: false, error: '拒绝：非页面请求' }, 403);
+    }
     try {
-      // 1. 删除所有助手 identity.md 中的闲不住协议块
+      const input = await readBody(c);
+      if (input.confirm !== true) {
+        return json({ success: false, error: '请确认后再执行' }, 400);
+      }
+      // 1. 删除所有助手 identity.md 中的闲不住协议块（含极简协议）
       const agentsDir = path.join(HANA_HOME, 'agents');
       if (fs.existsSync(agentsDir)) {
         const entries = fs.readdirSync(agentsDir, { withFileTypes: true });
@@ -834,8 +979,12 @@ export default async function registerRoutes(app, ctx = {}) {
           const identityPath = path.join(agentsDir, entry.name, 'identity.md');
           if (!fs.existsSync(identityPath)) continue;
           let content = fs.readFileSync(identityPath, 'utf-8');
-          const newContent = content.replace(
+          let newContent = content.replace(
             /<!-- work-visit-protocol-v\d+ -->[\s\S]*?<!-- \/work-visit-protocol-v\d+ -->\s*/g,
+            ''
+          );
+          newContent = newContent.replace(
+            /<!-- work-visit-minimal -->[\s\S]*?<!-- \/work-visit-minimal -->\s*/g,
             ''
           );
           if (newContent !== content) {

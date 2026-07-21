@@ -23,16 +23,17 @@ export async function execute(args, ctx = {}) {
     if (!data.days[ts]) {
       data.days[ts] = { date: ts, partners: {}, baseLP: 100, totalLP: 100, claimed: 0 };
     }
-    const pid = (args && args.partner) || 'hanako';
+    const pid = (typeof args?.partner === 'string' && args.partner.length <= 100) ? args.partner : 'hanako';
     if (!data.days[ts].partners[pid]) {
       data.days[ts].partners[pid] = { contributed: false, narrative: '', effortLP: 0 };
     }
-    data.days[ts].partners[pid].narrative = args?.narrative || '';
+    const narrative = typeof args?.narrative === 'string' ? args.narrative.slice(0, 200) : '';
+    data.days[ts].partners[pid].narrative = narrative;
     data.days[ts].partners[pid].contributed = true;
     saveData(data);
 
     return {
-      content: [{ type: 'text', text: JSON.stringify({ success: true, partner: pid, narrative: args?.narrative || '' }) }]
+      content: [{ type: 'text', text: JSON.stringify({ success: true, partner: pid, narrative }) }]
     };
   } catch (e) {
     console.error('[闲不住] update-status 出错:', e?.message || e);
