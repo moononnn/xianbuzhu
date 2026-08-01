@@ -427,27 +427,44 @@ export default async function registerRoutes(app, ctx = {}) {
   //  不再依赖 pendingVisits + check-visits，直接推送到助手对话框
   // ════════════════════════════════════════
 
-  // ─── 推送消息到目标助手的对话框 ───
+  // ─── 推送消息到目标助手的对话框（失败重试：助手流式输出时 session:send 会抛 session_busy） ───
   async function pushToAgent(agentId, text) {
-    try {
-      const bus = ctx.bus || ctx._bus;
-      if (!bus) {
-        console.warn("[闲不住] 推送失败: bus 不可用");
-        return false;
-      }
-      const sessionId = await findLatestSessionId(agentId);
-      if (!sessionId) {
-        console.warn(`[闲不住] 推送失败: 未找到 ${agentId} 的会话 ID`);
-        return false;
-      }
-      await bus.request("session:send", { text, sessionId });
-      console.log(
-        `[闲不住] 推送成功 → ${agentId} 会话 ${sessionId.slice(0, 20)}...`,
-      );
-      return true;
-    } catch (e) {
-      console.error("[闲不住] 推送失败:", e?.message || e);
+    const bus = ctx.bus || ctx._bus;
+    if (!bus) {
+      console.warn("[闲不住] 推送失败: bus 不可用");
       return false;
+    }
+    const sessionId = await findLatestSessionId(agentId);
+    if (!sessionId) {
+      console.warn(`[闲不住] 推送失败: 未找到 ${agentId} 的会话 ID`);
+      return false;
+    }
+
+    // 会话忙（流式输出中）时等待重试：2s / 5s / 10s，最多 3 次；非忙碌错误不重试
+    const delays = [2000, 5000, 10000];
+    for (let attempt = 0; ; attempt++) {
+      try {
+        await bus.request("session:send", { text, sessionId });
+        console.log(
+          `[闲不住] 推送成功 → ${agentId} 会话 ${sessionId.slice(0, 20)}...`,
+        );
+        return true;
+      } catch (e) {
+        const msg = e?.message || String(e);
+        const busy = /busy/i.test(msg);
+        if (!busy || attempt >= delays.length) {
+          console.error(
+            `[闲不住] 推送失败${busy ? `（会话忙，重试 ${delays.length} 次后仍失败）` : "（非忙碌错误）"}:`,
+            msg,
+          );
+          return false;
+        }
+        const delay = delays[attempt];
+        console.log(
+          `[闲不住] 会话忙，${delay / 1000}s 后重试 (${attempt + 1}/${delays.length})`,
+        );
+        await new Promise((r) => setTimeout(r, delay));
+      }
     }
   }
 
