@@ -1,5 +1,23 @@
 # 闲不住 更新日志
 
+## v2.3.4 — 代码健康度修复
+
+### 🔧 修复
+- **格式化重排**：index.js、llm.js 用 prettier 重排缩进，消除 processVisitEvent 等历史事故函数的括号结构脆弱性
+- **统一统计口径**：/api/data 不再内联统计，统一走 scanWorkStats（带 1 分钟缓存），展板 LP 与工作消耗同源；统计结果变化时才写盘，前端轮询不再每 GET 都 saveData
+- **移除 sqlite3 CLI 依赖**：findLatestSessionId 改为从最新会话文件内容提取 sess id（零依赖），不再依赖本机 sqlite3 命令
+- **路径穿越防护**：/api/avatar 的 agentId 加白名单正则（仅字母数字下划线连字符）
+- **模型列表 URL 归一化**：fetchCustomModels 兼容带 /v1 的 baseUrl，避免 /v1/v1/models
+- **update-status 默认值**：不再写死 hanako，默认写调用方 agent
+- **负好感阶段**：AFFECTION_STAGES 新增「疏远」档（-20~-1），与 describeAffection 口径一致
+- **送礼回礼注释**：data.jar += 3 注明是回礼设计
+- **弹幕模板键简化**：冗余三元分支合并
+
+### 🔧 开发
+- 新增 getAffectionStage 负好感测试（共 16 条）
+
+---
+
 ## v2.3.3 — 好感度也模糊化：注入层零数字
 
 ### 🐛 修复

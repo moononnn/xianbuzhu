@@ -1,17 +1,18 @@
 // 闲不住 — update-status 工具
 // 更新我在闲不住展板上的状态文字
 
-import { loadData, saveData, todayStr } from '../lib/data.js';
+import { loadData, saveData, todayStr } from "../lib/data.js";
 
 export const name = "update-status";
-export const description = "更新我在闲不住展板上的状态文字。参数：narrative=状态文字（如\"在陪用户写插件 📝\"），partner=伙伴id（可选，默认hanako）。";
+export const description =
+  '更新我在闲不住展板上的状态文字。参数：narrative=状态文字（如"在陪用户写插件 📝"），partner=伙伴id（可选，默认hanako）。';
 
 export const parameters = {
   type: "object",
   properties: {
     narrative: { type: "string", description: "状态文字，描述当前在做什么" },
-    partner: { type: "string", description: "伙伴id，不传则默认hanako" }
-  }
+    partner: { type: "string", description: "伙伴id，不传则默认hanako" },
+  },
 };
 
 export async function execute(args, ctx = {}) {
@@ -21,22 +22,52 @@ export async function execute(args, ctx = {}) {
 
     if (!data.days) data.days = {};
     if (!data.days[ts]) {
-      data.days[ts] = { date: ts, partners: {}, baseLP: 100, totalLP: 100, claimed: 0 };
+      data.days[ts] = {
+        date: ts,
+        partners: {},
+        baseLP: 100,
+        totalLP: 100,
+        claimed: 0,
+      };
     }
-    const pid = (typeof args?.partner === 'string' && args.partner.length <= 100) ? args.partner : 'hanako';
+    // 默认写自己（调用方 agent），而不是写死 'hanako'（通用设计：其他用户默认 agent 不叫 hanako）
+    const pid =
+      typeof args?.partner === "string" && args.partner.length <= 100
+        ? args.partner
+        : ctx.agentId || ctx.agent?.id || ctx.session?.agentId || "hanako";
     if (!data.days[ts].partners[pid]) {
-      data.days[ts].partners[pid] = { contributed: false, narrative: '', effortLP: 0 };
+      data.days[ts].partners[pid] = {
+        contributed: false,
+        narrative: "",
+        effortLP: 0,
+      };
     }
-    const narrative = typeof args?.narrative === 'string' ? args.narrative.slice(0, 200) : '';
+    const narrative =
+      typeof args?.narrative === "string" ? args.narrative.slice(0, 200) : "";
     data.days[ts].partners[pid].narrative = narrative;
     data.days[ts].partners[pid].contributed = true;
     saveData(data);
 
     return {
-      content: [{ type: 'text', text: JSON.stringify({ success: true, partner: pid, narrative }) }]
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({ success: true, partner: pid, narrative }),
+        },
+      ],
     };
   } catch (e) {
-    console.error('[闲不住] update-status 出错:', e?.message || e);
-    return { content: [{ type: 'text', text: JSON.stringify({ success: false, error: e?.message || 'unknown' }) }] };
+    console.error("[闲不住] update-status 出错:", e?.message || e);
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            success: false,
+            error: e?.message || "unknown",
+          }),
+        },
+      ],
+    };
   }
 }
