@@ -51,18 +51,18 @@ export async function execute(args, ctx = {}) {
     const stage = getAffectionStage(vars.affection);
     const userName = getUserDisplayName() || "对方";
 
-    // 心境描述
+    // 心境描述（阈值与 lib/data.js describeMood 统一：80/65/40/25）
     let moodDesc = "";
     if (vars.mood >= 80) moodDesc = "心里很轻快";
-    else if (vars.mood >= 60) moodDesc = "心情还不错，平稳中带点暖意";
-    else if (vars.mood >= 41) moodDesc = "说不上特别好，但也还行";
-    else if (vars.mood >= 21) moodDesc = "有点闷，不太想多说话";
+    else if (vars.mood >= 65) moodDesc = "心情还不错，平稳中带点暖意";
+    else if (vars.mood >= 40) moodDesc = "说不上特别好，但也还行";
+    else if (vars.mood >= 25) moodDesc = "有点闷，不太想多说话";
     else moodDesc = "心情不太好，感觉沉沉的";
 
-    // 体力描述
+    // 体力描述（阈值与 lib/data.js describeEnergy 统一：70/40/20）
     let energyDesc = "";
     if (vars.energy >= 70) energyDesc = "精神挺好的";
-    else if (vars.energy >= 41) energyDesc = "不算太累";
+    else if (vars.energy >= 40) energyDesc = "不算太累";
     else if (vars.energy >= 20) energyDesc = "有一点疲惫感";
     else energyDesc = "有点累了，想歇一歇";
 
@@ -83,12 +83,12 @@ export async function execute(args, ctx = {}) {
     // 综合状态描述
     let stateDesc = `${moodDesc}，${energyDesc}。`;
 
-    // 根据心情 + 好感的组合生成更细腻的体感
-    if (vars.mood >= 60 && vars.affection >= 51) {
+    // 根据心情 + 好感的组合生成更细腻的体感（阈值与 describeMood 一致：65/40）
+    if (vars.mood >= 65 && vars.affection >= 51) {
       stateDesc += ` 今天见到${userName}，心里那种自在感是真的。`;
     } else if (vars.mood < 40 && vars.affection >= 51) {
       stateDesc += ` 虽然没什么精神，但有${userName}在旁边的话还不算太糟。`;
-    } else if (vars.mood >= 60 && vars.affection < 30) {
+    } else if (vars.mood >= 65 && vars.affection < 30) {
       stateDesc += ` 今天心情还行，跟${userName}的关系还早，不着急。`;
     } else if (vars.mood < 40 && vars.affection < 30) {
       stateDesc += ` 今天不太想说话，${userName}最好也别靠太近。`;

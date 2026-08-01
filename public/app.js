@@ -184,13 +184,14 @@
       }
       html += '</div>';
       html += '<div class="board-doing">' + escapeHtml(p.doing) + '</div>';
-      // 变量展示
+      // 变量展示（mood 阈值与 lib/data.js describeMood 统一：80/65/40/25）
       if (p.variables) {
         var v = p.variables;
-        var moodEmoji = v.mood >= 76 ? '\uD83D\uDE04' : v.mood >= 51 ? '\uD83D\uDE0C' : v.mood >= 26 ? '\uD83D\uDE11' : '\uD83D\uDE29';
-        var moodLabel = v.mood >= 76 ? '心情很好' : v.mood >= 51 ? '心情平稳' : v.mood >= 26 ? '不太好' : '心情很差';
+        var moodEmoji = v.mood >= 80 ? '\uD83D\uDE04' : v.mood >= 65 ? '\uD83D\uDE0C' : v.mood >= 40 ? '\uD83D\uDE10' : v.mood >= 25 ? '\uD83D\uDE11' : '\uD83D\uDE29';
+        var moodLabel = v.mood >= 80 ? '心情很好' : v.mood >= 65 ? '心情不错' : v.mood >= 40 ? '心情平稳' : v.mood >= 25 ? '有点闷' : '心情很差';
         var energyPct = Math.max(0, Math.min(100, v.energy || 0));
-        var energyColor = energyPct >= 60 ? '#4CAF50' : energyPct >= 30 ? '#FF9800' : '#f44336';
+        // energy 颜色阈值与 describeEnergy 统一：70/40/20
+        var energyColor = energyPct >= 70 ? '#4CAF50' : energyPct >= 40 ? '#FF9800' : '#f44336';
         html += '<div class="board-vars">';
         html += '<div class="var-energy"><span class="energy-icon">\uD83D\uDD0B</span><div class="energy-bar-bg"><div class="energy-bar-fill" style="width:' + energyPct + '%;background:' + energyColor + '"></div></div><span class="energy-num">' + v.energy + '</span></div>';
         html += '<span class="var-mood" title="' + moodLabel + '">' + moodEmoji + '</span>';
@@ -955,7 +956,12 @@
         state.jar = data.jar;
         if (currentAction.type === 'prank') {
           if (currentAction.itemId === 'unplug') {
-            updatePersistentToast('🔌 已经关机啦！');
+            // 只有真实注入成功才显示"关机成功"（unplug 推送结果由后端返回 pushed）
+            if (data.pushed) {
+              updatePersistentToast('🔌 已经关机啦！');
+            } else {
+              updatePersistentToast('🔌 她好像不在线，没关成');
+            }
             setTimeout(clearPersistentToast, 3000);
           } else if (currentAction.itemId === 'brainrot') {
             if (data.injected) {
@@ -984,10 +990,19 @@
           }
         } else if (currentAction.type === 'gift') {
           clearPersistentToast();
-          toast(currentAction.icon + ' 已送出');
+          // 只有真实送达才显示"已送出"（推送结果由后端 await 后返回）
+          if (data.pushed) {
+            toast(currentAction.icon + ' 已送出');
+          } else {
+            toast(currentAction.icon + ' 已送出，但她暂时没在线');
+          }
         } else {
           clearPersistentToast();
-          toast(currentAction.icon + ' 已发送');
+          if (data.pushed) {
+            toast(currentAction.icon + ' 已发送');
+          } else {
+            toast(currentAction.icon + ' 没送达，她好像不在');
+          }
         }
         window._tbClose();
         render();
@@ -1252,7 +1267,11 @@
             break;
           }
         }
-        toast(data.tip || '⚡ 充电完成！');
+        if (data.pushed) {
+          toast(data.tip || '⚡ 充电完成！');
+        } else {
+          toast('⚡ 充好了，但她好像不在线，通知没送达');
+        }
         render();
       } else {
         toast(data.error || '充电失败', 'error');

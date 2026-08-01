@@ -116,6 +116,20 @@ function json(data, status = 200) {
   });
 }
 
+// ─── 助手 ID 校验：字符白名单 + 拒绝原型链特殊键 ───
+// 用途：to/partner 等会进入路径拼接或对象键写入的参数，
+// 白名单阻止路径穿越（../），拒绝 __proto__ 等防止原型污染
+// （导出以便单元测试）
+export function isValidAgentId(id) {
+  return (
+    typeof id === "string" &&
+    id.length > 0 &&
+    id.length <= 100 &&
+    /^[a-zA-Z0-9_-]+$/.test(id) &&
+    !["__proto__", "constructor", "prototype"].includes(id)
+  );
+}
+
 // ─── 渲染页面 ───
 function renderPage(token) {
   let css = "",
@@ -146,7 +160,7 @@ function renderPage(token) {
 // ==========================================
 //  路由注册
 // ==========================================
-export default async function registerRoutes(app, ctx = {}) {
+export default async function register(app, ctx = {}) {
   // 读取插件版本号
   let pluginVersion = "0.1.0";
   try {
@@ -707,8 +721,7 @@ export default async function registerRoutes(app, ctx = {}) {
       if (
         typeof itemId !== "string" ||
         itemId.length > 50 ||
-        typeof to !== "string" ||
-        to.length > 100
+        !isValidAgentId(to)
       ) {
         return json({ success: false, error: "参数格式错误" }, 400);
       }
@@ -817,6 +830,9 @@ export default async function registerRoutes(app, ctx = {}) {
         status: "pushed",
       };
 
+      // 推送结果（互动/礼物/充电 await 等待，界面只显示真实送达状态；unplug 走独立流程）
+      let pushOk = true;
+
       if (type === "prank" && itemId === "unplug") {
         // ── 关机键：生成崩溃剧本 → 存 pendingVisit → abort → 推送「重启！」──
         const crashReply = await generateCrashReply(to);
@@ -846,9 +862,13 @@ export default async function registerRoutes(app, ctx = {}) {
               sessionPath: latestSession,
             });
             console.log("[闲不住] 关机键「重启！」注入成功 → " + to);
+            pushOk = true;
+          } else {
+            pushOk = false;
           }
         } catch (e) {
           console.error("[闲不住] 关机键处理失败:", e?.message || e);
+          pushOk = false;
         }
         // 异步修改变量+小纸条（统一在下方 processVisitEvent 处理，避免重复调用）
       } else {
@@ -867,9 +887,17 @@ export default async function registerRoutes(app, ctx = {}) {
         let pushText =
           _pushVariants[Math.floor(Math.random() * _pushVariants.length)];
 
-        pushToAgent(to, pushText).catch((err) => {
+        // 等待推送结果（与怪话流程同思路：只有真实送达才显示成功）
+        try {
+          pushOk = await pushToAgent(to, pushText);
+        } catch (err) {
           console.error("[闲不住] 互动/礼物推送失败:", err?.message || err);
-        });
+        }
+        if (!pushOk) {
+          console.warn(
+            `[闲不住] 互动/礼物未送达: ${to}（未找到会话或推送失败）`,
+          );
+        }
 
         sendBarrage(to, type, itemId, item.name, item.icon);
       }
@@ -883,6 +911,7 @@ export default async function registerRoutes(app, ctx = {}) {
         success: true,
         visitId: visit.id,
         jar: data.jar,
+        pushed: pushOk,
         item: { id: item.id, icon: item.icon, name: item.name, type },
       });
     });
@@ -896,7 +925,10 @@ export default async function registerRoutes(app, ctx = {}) {
     const data = loadData();
     const { to } = input;
 
-    if (!to) return json({ success: false, error: "缺少助手 ID" }, 400);
+    // 助手 ID 白名单校验（防路径穿越/原型污染）
+    if (!isValidAgentId(to)) {
+      return json({ success: false, error: "助手 ID 不合法" }, 400);
+    }
 
     // 检查今天是否已充过
     if (isRechargedToday(data, to)) {
@@ -938,17 +970,23 @@ export default async function registerRoutes(app, ctx = {}) {
 
     saveData(data);
 
-    // 推送统一充电通知到助手对话框
+    // 推送统一充电通知到助手对话框（等待结果，界面只显示真实送达状态）
     const _chargeVariants = [
       `⚡ 收到来自${getUserDisplayName()}的充电～`,
       `⚡ ${getUserDisplayName()}给你充了电！`,
     ];
-    pushToAgent(
-      to,
-      _chargeVariants[Math.floor(Math.random() * _chargeVariants.length)],
-    ).catch((err) => {
+    let pushOk = false;
+    try {
+      pushOk = await pushToAgent(
+        to,
+        _chargeVariants[Math.floor(Math.random() * _chargeVariants.length)],
+      );
+    } catch (err) {
       console.error("[闲不住] 充电推送失败:", err?.message || err);
-    });
+    }
+    if (!pushOk) {
+      console.warn(`[闲不住] 充电通知未送达: ${to}`);
+    }
 
     sendBarrage(to, "recharge", "recharge", "充电", "");
 
@@ -956,6 +994,7 @@ export default async function registerRoutes(app, ctx = {}) {
       success: true,
       jar: data.jar,
       energy: 100,
+      pushed: pushOk,
       tip,
     });
   });
@@ -977,7 +1016,8 @@ export default async function registerRoutes(app, ctx = {}) {
     const pid = input.partner || "hanako";
 
     // 输入校验
-    if (typeof pid !== "string" || pid.length > 100) {
+    // 输入校验：助手 ID 白名单（防路径穿越/原型污染）
+    if (!isValidAgentId(pid)) {
       return json({ success: false, error: "参数错误" }, 400);
     }
     const narrative =
@@ -1155,8 +1195,8 @@ export default async function registerRoutes(app, ctx = {}) {
   // ════════════════════════════════════════
   app.get("/api/avatar/:agentId", (c) => {
     const agentId = c.req.param("agentId");
-    // 路径穿越防护：agentId 只允许字母数字下划线连字符
-    if (!/^[a-zA-Z0-9_-]+$/.test(agentId)) {
+    // 路径穿越防护：复用统一的白名单校验（含特殊键拒绝）
+    if (!isValidAgentId(agentId)) {
       return new Response(null, { status: 404 });
     }
     const avatarPath = path.join(
@@ -1335,6 +1375,10 @@ export default async function registerRoutes(app, ctx = {}) {
     if (!decorationId || !target) {
       return json({ success: false, error: "缺少参数" }, 400);
     }
+    // 助手 ID 白名单校验（防原型污染：target="__proto__" 会命中 Object.prototype）
+    if (!isValidAgentId(target)) {
+      return json({ success: false, error: "参数错误" }, 400);
+    }
 
     const item = (data.decorationItems || []).find(
       (i) => i.id === decorationId,
@@ -1411,6 +1455,10 @@ export default async function registerRoutes(app, ctx = {}) {
     if (!target || !type || !itemId) {
       return json({ success: false, error: "缺少参数" }, 400);
     }
+    // 助手 ID 白名单校验（与 buy-decoration 一致）
+    if (!isValidAgentId(target)) {
+      return json({ success: false, error: "参数错误" }, 400);
+    }
 
     const partnerCfg = data.partnerConfig?.[target];
     if (!partnerCfg) return json({ success: false, error: "助手不存在" }, 400);
@@ -1436,6 +1484,10 @@ export default async function registerRoutes(app, ctx = {}) {
     if (!target || !type) {
       return json({ success: false, error: "缺少参数" }, 400);
     }
+    // 助手 ID 白名单校验（与 buy-decoration 一致）
+    if (!isValidAgentId(target)) {
+      return json({ success: false, error: "参数错误" }, 400);
+    }
 
     const partnerCfg = data.partnerConfig?.[target];
     if (!partnerCfg) return json({ success: false, error: "助手不存在" }, 400);
@@ -1446,6 +1498,58 @@ export default async function registerRoutes(app, ctx = {}) {
       saveData(data);
     }
     return json({ success: true, decorations: deco });
+  });
+
+  // ════════════════════════════════════════
+  //  GET /api/current-agent — 获取当前正在对话的 agent
+  //  让闲不住能自动选中"你正在聊的那个"
+  // ════════════════════════════════════════
+  app.get("/api/current-agent", async (c) => {
+    try {
+      // 零依赖方案（替代 sqlite3 CLI）：遍历所有伙伴，找 mtime 最新的会话文件所属 agent
+      const partnerIds = getPartnerIds(loadData());
+      let best = null;
+      let bestTime = 0;
+      for (const id of partnerIds) {
+        const p = findLatestSessionPath(id);
+        if (!p) continue;
+        try {
+          const st = fs.statSync(p);
+          if (st.mtimeMs > bestTime) {
+            bestTime = st.mtimeMs;
+            best = id;
+          }
+        } catch {}
+      }
+      return json({ success: true, agentId: best || null });
+    } catch (e) {
+      console.error("[闲不住] 获取当前 agent 失败:", e?.message || e);
+      return json({ success: false, error: e?.message || "查询失败" });
+    }
+  });
+
+  // ════════════════════════════════════════
+  //  GET /api/partner-order — 读取用户自定义伙伴排序
+  //  左侧伙伴墙可拖动排序，保存到 data.partnerOrder
+  // ════════════════════════════════════════
+  app.get("/api/partner-order", async (c) => {
+    const data = loadData();
+    return json({ success: true, order: data.partnerOrder || [] });
+  });
+
+  // ════════════════════════════════════════
+  //  POST /api/partner-order — 保存伙伴排序
+  // ════════════════════════════════════════
+  app.post("/api/partner-order", async (c) => {
+    const input = await readBody(c);
+    const data = loadData();
+    if (!Array.isArray(input.order)) {
+      return json({ success: false, error: "order 必须是数组" }, 400);
+    }
+    // 过滤非法元素（只保留合法助手 ID，防脏数据写进排序）
+    data.partnerOrder = input.order.filter((id) => isValidAgentId(id));
+    saveData(data);
+    return json({ success: true });
   });
 
   // ════════════════════════════════════════
@@ -1555,3 +1659,6 @@ function compareVersions(a, b) {
   }
   return 0;
 }
+
+// named export 'register'，双保险（plugin runtime 无论是 default 还是 named import 都能找到）
+export { register };
