@@ -10,6 +10,7 @@ import {
   buildMoodReason,
   describeMood,
   describeEnergy,
+  describeAffection,
   buildMoodContext,
   clampVariable,
   recordEvent,
@@ -107,14 +108,33 @@ test('describeEnergy: 各档位边界', () => {
   assert.equal(describeEnergy(19), '累坏了');
 });
 
+test('describeAffection: 各档位边界（关系进度也模糊化，不给数字）', () => {
+  assert.equal(describeAffection(100), '你们亲密无间');
+  assert.equal(describeAffection(81), '你们亲密无间');
+  assert.equal(describeAffection(80), '你们已经很亲近');
+  assert.equal(describeAffection(51), '你们已经很亲近');
+  assert.equal(describeAffection(50), '你们正在慢慢熟悉');
+  assert.equal(describeAffection(21), '你们正在慢慢熟悉');
+  assert.equal(describeAffection(20), '你们还不算熟');
+  assert.equal(describeAffection(0), '你们还不算熟');
+  assert.equal(describeAffection(-5), '你们之间有点疏远');
+  assert.equal(describeAffection(-20), '你们之间有点疏远');
+});
+
 test('buildMoodContext: 带原因/不带原因/空 vars', () => {
   assert.equal(buildMoodContext(null), '');
   const withReason = buildMoodContext({ mood: 70, energy: 50, affection: 30, moodReason: '昨天收到了一束花' });
   assert.ok(withReason.includes('心情不错'));
   assert.ok(withReason.includes('昨天收到了一束花'));
-  assert.ok(withReason.includes('熟悉'));
+  assert.ok(withReason.includes('你们正在慢慢熟悉'));
   const noReason = buildMoodContext({ mood: 70, energy: 50, affection: 30 });
   assert.ok(!noReason.includes('昨天收到了一束花'));
+});
+
+test('buildMoodContext: 注入文本零数字', () => {
+  const text = buildMoodContext({ mood: 88, energy: 95, affection: 98, moodReason: '昨天收到了一束花' });
+  // 不应出现任何数字（好感度数值、心情数值、精力数值都不能有）
+  assert.ok(!/\d/.test(text), '注入文本不应包含数字: ' + text);
 });
 
 // ─── recordEvent：今日事件记录结构 ───
