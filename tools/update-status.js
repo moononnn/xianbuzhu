@@ -5,7 +5,7 @@ import { loadData, saveData, todayStr } from "../lib/data.js";
 
 export const name = "update-status";
 export const description =
-  '更新我在闲不住展板上的状态文字。参数：narrative=状态文字（如"在陪用户写插件 📝"），partner=伙伴id（可选，默认hanako）。';
+  '更新我在闲不住展板上的状态文字。参数：narrative=状态文字（如"在陪用户写插件 📝"），partner=伙伴id（可选，不传则默认写自己）。';
 
 export const parameters = {
   type: "object",

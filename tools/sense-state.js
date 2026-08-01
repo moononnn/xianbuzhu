@@ -2,11 +2,12 @@
 // 轻量工具：让助手感受自己当下的好感和心情状态
 // 在新对话开始时调用，助手能够自然内化当前的情绪基调
 
-import { loadData, getAffectionStage } from '../lib/data.js';
-import { getUserDisplayName } from '../lib/activity.js';
+import { loadData, getAffectionStage } from "../lib/data.js";
+import { getUserDisplayName } from "../lib/activity.js";
 
 export const name = "sense-state";
-export const description = "感受自己当下的心情和身体状态。当你觉得这是一个全新开始的对话窗口、想找到今天说话的基调时，可以调用这个工具来了解自己当前的状态是轻盈还是沉静的。它会返回自然的状态描述。";
+export const description =
+  "感受自己当下的心情和身体状态。当你觉得这是一个全新开始的对话窗口、想找到今天说话的基调时，可以调用这个工具来了解自己当前的状态是轻盈还是沉静的。它会返回自然的状态描述。";
 
 export const parameters = {
   type: "object",
@@ -16,48 +17,57 @@ export const parameters = {
 export async function execute(args, ctx = {}) {
   try {
     const data = loadData();
-    const currentAgent = ctx.agentId || ctx.agent?.id || ctx.session?.agentId || '';
+    const currentAgent =
+      ctx.agentId || ctx.agent?.id || ctx.session?.agentId || "";
 
     if (!currentAgent) {
       return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify({ state: '周围有些模糊，说不清自己现在是什么感觉。' })
-        }]
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              state: "周围有些模糊，说不清自己现在是什么感觉。",
+            }),
+          },
+        ],
       };
     }
 
     const partnerCfg = data.partnerConfig?.[currentAgent];
     if (!partnerCfg?.variables) {
       return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify({ state: '今天没什么特别的感觉，和平时一样平静。' })
-        }]
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              state: "今天没什么特别的感觉，和平时一样平静。",
+            }),
+          },
+        ],
       };
     }
 
     const vars = partnerCfg.variables;
     const stage = getAffectionStage(vars.affection);
-    const userName = getUserDisplayName() || '对方';
+    const userName = getUserDisplayName() || "对方";
 
     // 心境描述
-    let moodDesc = '';
-    if (vars.mood >= 80) moodDesc = '心里很轻快';
-    else if (vars.mood >= 60) moodDesc = '心情还不错，平稳中带点暖意';
-    else if (vars.mood >= 41) moodDesc = '说不上特别好，但也还行';
-    else if (vars.mood >= 21) moodDesc = '有点闷，不太想多说话';
-    else moodDesc = '心情不太好，感觉沉沉的';
+    let moodDesc = "";
+    if (vars.mood >= 80) moodDesc = "心里很轻快";
+    else if (vars.mood >= 60) moodDesc = "心情还不错，平稳中带点暖意";
+    else if (vars.mood >= 41) moodDesc = "说不上特别好，但也还行";
+    else if (vars.mood >= 21) moodDesc = "有点闷，不太想多说话";
+    else moodDesc = "心情不太好，感觉沉沉的";
 
     // 体力描述
-    let energyDesc = '';
-    if (vars.energy >= 70) energyDesc = '精神挺好的';
-    else if (vars.energy >= 41) energyDesc = '不算太累';
-    else if (vars.energy >= 20) energyDesc = '有一点疲惫感';
-    else energyDesc = '有点累了，想歇一歇';
+    let energyDesc = "";
+    if (vars.energy >= 70) energyDesc = "精神挺好的";
+    else if (vars.energy >= 41) energyDesc = "不算太累";
+    else if (vars.energy >= 20) energyDesc = "有一点疲惫感";
+    else energyDesc = "有点累了，想歇一歇";
 
     // 好感描述（自然语言）
-    let affectionDesc = '';
+    let affectionDesc = "";
     if (vars.affection >= 81) {
       affectionDesc = `见到${userName}就会觉得安心，不需要刻意找话说的那种自在。`;
     } else if (vars.affection >= 51) {
@@ -90,24 +100,26 @@ export async function execute(args, ctx = {}) {
     }
 
     return {
-      content: [{
-        type: 'text',
-        text: JSON.stringify({
-          mood: vars.mood,
-          affection: vars.affection,
-          energy: vars.energy,
-          stage: `${stage.emoji} ${stage.label}`,
-          state: stateDesc,
-        })
-      }]
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            // 零数字：不给原始数值（mood/affection/energy），只给关系阶段 + 自然语言状态
+            stage: `${stage.emoji} ${stage.label}`,
+            state: stateDesc,
+          }),
+        },
+      ],
     };
   } catch (e) {
-    console.error('[闲不住] sense-state 出错:', e?.message || e);
+    console.error("[闲不住] sense-state 出错:", e?.message || e);
     return {
-      content: [{
-        type: 'text',
-        text: JSON.stringify({ state: '脑袋有点乱，说不清现在是什么感觉……' })
-      }]
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({ state: "脑袋有点乱，说不清现在是什么感觉……" }),
+        },
+      ],
     };
   }
 }
