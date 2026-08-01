@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { loadData, saveData, nextId, todayStr, getToday, calcLightParticles, randomIdle, nowISO, randomTip, findLatestSessionPath, getRechargeTip, getRechargeAutoReply, isRechargedToday, markRechargedToday } from '../lib/data.js';
+import { loadData, saveData, nextId, todayStr, getToday, calcLightParticles, randomIdle, nowISO, randomTip, findLatestSessionPath, getRechargeTip, getRechargeAutoReply, isRechargedToday, markRechargedToday, recordEvent } from '../lib/data.js';
 import { getAvailableModels, getLLMConfig, saveLLMConfig, processVisitEvent, callLLM, generateBrainrot, generateCrashReply, fetchCustomModels, encryptKey } from '../lib/llm.js';
 import { getPartnerConfig, getPartnerIds } from '../lib/config.js';
 import { scanTodayActivity, getUserDisplayName } from '../lib/activity.js';
@@ -682,6 +682,9 @@ export default async function registerRoutes(app, ctx = {}) {
 
     // 标记今天已充
     markRechargedToday(data, to);
+
+    // 记录事件（供次日心情推演）
+    recordEvent(data, to, { type: 'recharge', itemId: 'recharge', itemName: '充电', price: 0 });
 
     // 生成充电提示
     const tip = getRechargeTip();

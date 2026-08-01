@@ -84,6 +84,11 @@ export async function execute(args, ctx = {}) {
       stateDesc += ` 今天不太想说话，${userName}最好也别靠太近。`;
     }
 
+    // 心情的来由（事件驱动，给 agent 一个可以顺势演绎的方向，但保留自主权）
+    if (vars.moodReason) {
+      stateDesc += ` 心情的来由：${vars.moodReason}，具体怎么表现由你自己把握。`;
+    }
+
     return {
       content: [{
         type: 'text',

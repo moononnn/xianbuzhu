@@ -2,7 +2,7 @@
 // 检查是否有来自用户的闲不住互动或事件待处理
 // 主要用于关机键崩溃演出：收到「重启！」指令时优先调用此工具
 
-import { loadData, saveData, getAffectionStage } from '../lib/data.js';
+import { loadData, saveData, buildMoodContext } from '../lib/data.js';
 import { getUserDisplayName } from '../lib/activity.js';
 
 export const name = "check-visits";
@@ -81,15 +81,12 @@ export async function execute(args, ctx = {}) {
           createdAt: rc.createdAt,
         }));
 
-        // 附上当前状态
+        // 附上当前状态（模糊描述，不给硬数值）
         let moodPart = '';
         if (currentAgent) {
           const vars = data.partnerConfig?.[currentAgent]?.variables;
           if (vars) {
-            const stage = getAffectionStage(vars.affection);
-            const energyL = vars.energy >= 70 ? '精力充沛' : vars.energy >= 40 ? '还行' : vars.energy >= 20 ? '有点累' : '累坏了';
-            const moodL = vars.mood >= 76 ? '心情很好' : vars.mood >= 51 ? '心情平稳' : vars.mood >= 26 ? '不太好' : '心情很差';
-            moodPart = ` (精力${vars.energy} ${energyL}，心情${vars.mood} ${moodL}，${stage.emoji} ${stage.label})`;
+            moodPart = ` (${buildMoodContext(vars)})`;
           }
         }
 
@@ -105,10 +102,7 @@ export async function execute(args, ctx = {}) {
       if (currentAgent) {
         const vars = data.partnerConfig?.[currentAgent]?.variables;
         if (vars) {
-          const stage = getAffectionStage(vars.affection);
-          const energyL = vars.energy >= 70 ? '精力充沛' : vars.energy >= 40 ? '还行' : vars.energy >= 20 ? '有点累' : '累坏了';
-          const moodL = vars.mood >= 76 ? '心情很好' : vars.mood >= 51 ? '心情平稳' : vars.mood >= 26 ? '不太好' : '心情很差';
-          emptyMood = ` (精力${vars.energy} ${energyL}，心情${vars.mood} ${moodL}，${stage.emoji} ${stage.label})`;
+          emptyMood = ` (${buildMoodContext(vars)})`;
         }
       }
       return { content: [{ type: 'text', text: JSON.stringify({ visits: [], _mood: emptyMood }) }] };
@@ -118,10 +112,7 @@ export async function execute(args, ctx = {}) {
     if (currentAgent) {
       const vars = data.partnerConfig?.[currentAgent]?.variables;
       if (vars) {
-        const stage = getAffectionStage(vars.affection);
-        const energyL = vars.energy >= 70 ? '精力充沛' : vars.energy >= 40 ? '还行' : vars.energy >= 20 ? '有点累' : '累坏了';
-        const moodL = vars.mood >= 76 ? '心情很好' : vars.mood >= 51 ? '心情平稳' : vars.mood >= 26 ? '不太好' : '心情很差';
-        moodContext = `\n\n你的当前状态：精力 ${vars.energy}/100（${energyL}），心情 ${vars.mood}/100（${moodL}），${stage.emoji} ${stage.label}`;
+        moodContext = `\n\n你的当前状态：${buildMoodContext(vars)}`;
       }
     }
 
