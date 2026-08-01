@@ -218,6 +218,11 @@ test("getAffectionStage: 负好感返回疏远（与 describeAffection 口径一
   assert.equal(getAffectionStage(100).label, "亲密");
 });
 
+test("getAffectionStage: NaN/非法值兜底为初识", () => {
+  assert.equal(getAffectionStage(NaN).label, "初识");
+  assert.equal(getAffectionStage(undefined).label, "初识");
+});
+
 // ─── clampVariable：范围约束 ───
 
 test("clampVariable: 越界值被收敛", () => {

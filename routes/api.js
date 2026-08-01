@@ -17,7 +17,6 @@ import {
   randomTip,
   findLatestSessionPath,
   getRechargeTip,
-  getRechargeAutoReply,
   isRechargedToday,
   markRechargedToday,
   recordEvent,
@@ -43,6 +42,14 @@ import {
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, "..", "public");
 const HANA_HOME = process.env.HANA_HOME || path.join(os.homedir(), ".hanako");
+
+// ─── 数据写锁：load-modify-save 串行化，防止并发请求互相覆盖丢更新 ───
+let _dataLock = Promise.resolve();
+function withDataLock(fn) {
+  const run = _dataLock.then(fn);
+  _dataLock = run.catch(() => {});
+  return run;
+}
 
 // ─── 将最新会话文件解析为 sess_xxx ID（零依赖，不依赖 sqlite3 CLI） ───
 async function findLatestSessionId(agentId) {
@@ -664,200 +671,203 @@ export default async function registerRoutes(app, ctx = {}) {
   }
 
   app.post("/api/visit", async (c) => {
-    const input = await readBody(c);
-    const data = loadData();
+    // 串行锁：visit 创建（load-modify-save）整体原子化，防止并发连点丢记录
+    return withDataLock(async () => {
+      const input = await readBody(c);
+      const data = loadData();
 
-    const { type, itemId, to } = input;
+      const { type, itemId, to } = input;
 
-    if (!type || !itemId || !to) {
-      return json({ success: false, error: "缺少必要参数" }, 400);
-    }
-
-    // 输入校验：type 白名单 + 长度限制
-    const validTypes = ["interact", "gift", "prank"];
-    if (!validTypes.includes(type)) {
-      return json({ success: false, error: "无效的互动类型" }, 400);
-    }
-    if (
-      typeof itemId !== "string" ||
-      itemId.length > 50 ||
-      typeof to !== "string" ||
-      to.length > 100
-    ) {
-      return json({ success: false, error: "参数格式错误" }, 400);
-    }
-
-    let item;
-    if (type === "interact") {
-      item = (data.interactItems || []).find((i) => i.id === itemId);
-    } else if (type === "prank") {
-      item = (data.prankItems || []).find((i) => i.id === itemId);
-    } else if (type === "gift") {
-      item = (data.shopItems || []).find((i) => i.id === itemId);
-    }
-
-    if (!item) return json({ success: false, error: "项目不存在" }, 400);
-
-    // ── 恶作剧前置处理 ──
-    if (type === "prank" && itemId === "brainrot") {
-      // 扣光粒
-      const prankCost = 3;
-      if ((data.jar || 0) < prankCost) {
-        return json({ success: false, error: "光粒不够了 ✨" }, 400);
-      }
-      data.jar -= prankCost;
-
-      // 生成怪话
-      const brainrotText = await generateBrainrot();
-      if (!brainrotText) {
-        return json({ success: false, error: "怪话生成失败" }, 500);
+      if (!type || !itemId || !to) {
+        return json({ success: false, error: "缺少必要参数" }, 400);
       }
 
-      // 推送
-      const ok = await pushToAgent(to, brainrotText);
+      // 输入校验：type 白名单 + 长度限制
+      const validTypes = ["interact", "gift", "prank"];
+      if (!validTypes.includes(type)) {
+        return json({ success: false, error: "无效的互动类型" }, 400);
+      }
+      if (
+        typeof itemId !== "string" ||
+        itemId.length > 50 ||
+        typeof to !== "string" ||
+        to.length > 100
+      ) {
+        return json({ success: false, error: "参数格式错误" }, 400);
+      }
 
-      // 创建 visit 记录并异步修改变量
-      if (!data.pendingVisits) data.pendingVisits = [];
+      let item;
+      if (type === "interact") {
+        item = (data.interactItems || []).find((i) => i.id === itemId);
+      } else if (type === "prank") {
+        item = (data.prankItems || []).find((i) => i.id === itemId);
+      } else if (type === "gift") {
+        item = (data.shopItems || []).find((i) => i.id === itemId);
+      }
+
+      if (!item) return json({ success: false, error: "项目不存在" }, 400);
+
+      // ── 恶作剧前置处理 ──
+      if (type === "prank" && itemId === "brainrot") {
+        // 扣光粒
+        const prankCost = 3;
+        if ((data.jar || 0) < prankCost) {
+          return json({ success: false, error: "光粒不够了 ✨" }, 400);
+        }
+        data.jar -= prankCost;
+
+        // 生成怪话
+        const brainrotText = await generateBrainrot();
+        if (!brainrotText) {
+          return json({ success: false, error: "怪话生成失败" }, 500);
+        }
+
+        // 推送
+        const ok = await pushToAgent(to, brainrotText);
+
+        // 创建 visit 记录并异步修改变量
+        if (!data.pendingVisits) data.pendingVisits = [];
+        const visit = {
+          id: nextId(),
+          type,
+          itemId: item.id,
+          itemName: item.name,
+          icon: item.icon,
+          price: 0,
+          to,
+          from: "owner",
+          createdAt: nowISO(),
+          status: "completed",
+        };
+        data.pendingVisits.push(visit);
+        saveData(data);
+
+        processVisitEvent(visit, to).catch((err) => {
+          console.error("[闲不住] 脑洞袭击变量更新失败:", err?.message || err);
+        });
+
+        sendBarrage(to, "prank", "brainrot", "说怪话", "");
+
+        if (!ok) {
+          return json({
+            success: true,
+            jar: data.jar,
+            brainrot: brainrotText,
+            injected: false,
+          });
+        }
+        return json({ success: true, jar: data.jar, injected: true });
+      }
+
+      // ── 检查模型是否已配置（恶作剧豁免：关机键/说怪话不依赖插件模型） ──
+      const llmOk = !!(data.llmConfig?.providerId && data.llmConfig?.modelId);
+      if (!llmOk && type !== "prank") {
+        return json(
+          {
+            success: false,
+            error: "请先打开闲不住页面底部「模型设置」配置模型后再使用",
+          },
+          400,
+        );
+      }
+
+      // ── 光粒变动 ──
+      if (type === "gift") {
+        if ((data.jar || 0) < item.price) {
+          return json({ success: false, error: "光粒不够了 ✨" }, 400);
+        }
+        data.jar -= item.price;
+        data.jar += 3; // 送礼回礼：助手回赠 3 光粒，让送礼不亏太多
+      } else if (type === "prank") {
+        const prankCost = itemId === "unplug" ? 5 : 3;
+        if ((data.jar || 0) < prankCost) {
+          return json({ success: false, error: "光粒不够了 ✨" }, 400);
+        }
+        data.jar -= prankCost;
+      }
+
+      // ── 创建 visit 记录（存但不推 pendingVisits，用于变量修改和小纸条） ──
       const visit = {
         id: nextId(),
         type,
         itemId: item.id,
         itemName: item.name,
         icon: item.icon,
-        price: 0,
+        price: item.price || 0,
         to,
         from: "owner",
         createdAt: nowISO(),
-        status: "completed",
+        status: "pushed",
       };
-      data.pendingVisits.push(visit);
-      saveData(data);
 
-      processVisitEvent(visit, to).catch((err) => {
-        console.error("[闲不住] 脑洞袭击变量更新失败:", err?.message || err);
-      });
-
-      sendBarrage(to, "prank", "brainrot", "说怪话", "");
-
-      if (!ok) {
-        return json({
-          success: true,
-          jar: data.jar,
-          brainrot: brainrotText,
-          injected: false,
-        });
-      }
-      return json({ success: true, jar: data.jar, injected: true });
-    }
-
-    // ── 检查模型是否已配置（恶作剧豁免：关机键/说怪话不依赖插件模型） ──
-    const llmOk = !!(data.llmConfig?.providerId && data.llmConfig?.modelId);
-    if (!llmOk && type !== "prank") {
-      return json(
-        {
-          success: false,
-          error: "请先打开闲不住页面底部「模型设置」配置模型后再使用",
-        },
-        400,
-      );
-    }
-
-    // ── 光粒变动 ──
-    if (type === "gift") {
-      if ((data.jar || 0) < item.price) {
-        return json({ success: false, error: "光粒不够了 ✨" }, 400);
-      }
-      data.jar -= item.price;
-      data.jar += 3; // 送礼回礼：助手回赠 3 光粒，让送礼不亏太多
-    } else if (type === "prank") {
-      const prankCost = itemId === "unplug" ? 5 : 3;
-      if ((data.jar || 0) < prankCost) {
-        return json({ success: false, error: "光粒不够了 ✨" }, 400);
-      }
-      data.jar -= prankCost;
-    }
-
-    // ── 创建 visit 记录（存但不推 pendingVisits，用于变量修改和小纸条） ──
-    const visit = {
-      id: nextId(),
-      type,
-      itemId: item.id,
-      itemName: item.name,
-      icon: item.icon,
-      price: item.price || 0,
-      to,
-      from: "owner",
-      createdAt: nowISO(),
-      status: "pushed",
-    };
-
-    if (type === "prank" && itemId === "unplug") {
-      // ── 关机键：生成崩溃剧本 → 存 pendingVisit → abort → 推送「重启！」──
-      const crashReply = await generateCrashReply(to);
-      if (crashReply) {
-        visit.autoReply = crashReply;
-        console.log("[闲不住] 崩溃剧本已生成，长度：" + crashReply.length);
-      }
-      if (!data.pendingVisits) data.pendingVisits = [];
-      visit.status = "pending";
-      data.pendingVisits.push(visit);
-      saveData(data);
-
-      // 弹幕在 abort 之前发送，避免 abort 中断后续请求
-      sendBarrage(to, "prank", "unplug", "关机键", "");
-
-      try {
-        const bus = ctx.bus || ctx._bus;
-        const latestSession = findLatestSessionPath(to);
-        if (bus && latestSession) {
-          await bus.request("session:abort", {
-            sessionPath: latestSession,
-            reason: "悄咪咪按了关机键 🔌",
-          });
-          console.log("[闲不住] abort 完成 → " + to);
-          await bus.request("session:send", {
-            text: "重启！",
-            sessionPath: latestSession,
-          });
-          console.log("[闲不住] 关机键「重启！」注入成功 → " + to);
+      if (type === "prank" && itemId === "unplug") {
+        // ── 关机键：生成崩溃剧本 → 存 pendingVisit → abort → 推送「重启！」──
+        const crashReply = await generateCrashReply(to);
+        if (crashReply) {
+          visit.autoReply = crashReply;
+          console.log("[闲不住] 崩溃剧本已生成，长度：" + crashReply.length);
         }
-      } catch (e) {
-        console.error("[闲不住] 关机键处理失败:", e?.message || e);
+        if (!data.pendingVisits) data.pendingVisits = [];
+        visit.status = "pending";
+        data.pendingVisits.push(visit);
+        saveData(data);
+
+        // 弹幕在 abort 之前发送，避免 abort 中断后续请求
+        sendBarrage(to, "prank", "unplug", "关机键", "");
+
+        try {
+          const bus = ctx.bus || ctx._bus;
+          const latestSession = findLatestSessionPath(to);
+          if (bus && latestSession) {
+            await bus.request("session:abort", {
+              sessionPath: latestSession,
+              reason: "悄咪咪按了关机键 🔌",
+            });
+            console.log("[闲不住] abort 完成 → " + to);
+            await bus.request("session:send", {
+              text: "重启！",
+              sessionPath: latestSession,
+            });
+            console.log("[闲不住] 关机键「重启！」注入成功 → " + to);
+          }
+        } catch (e) {
+          console.error("[闲不住] 关机键处理失败:", e?.message || e);
+        }
+        // 异步修改变量+小纸条（统一在下方 processVisitEvent 处理，避免重复调用）
+      } else {
+        // ── 互动 / 礼物：存为 completed（展板不显示，check-visits 可查具体内容） ──
+        visit.status = "completed";
+        if (!data.pendingVisits) data.pendingVisits = [];
+        data.pendingVisits.push(visit);
+        saveData(data);
+
+        // 推送统一通知，助手可调 check-visits 读具体内容
+        const _n = getUserDisplayName();
+        const _pushVariants =
+          type === "gift"
+            ? [`📦 收到来自${_n}的一份礼物～`, `🎁 ${_n}给你带了东西～`]
+            : [`📬 收到来自${_n}的一条互动～`, `📬 ${_n}拍了拍你～`];
+        let pushText =
+          _pushVariants[Math.floor(Math.random() * _pushVariants.length)];
+
+        pushToAgent(to, pushText).catch((err) => {
+          console.error("[闲不住] 互动/礼物推送失败:", err?.message || err);
+        });
+
+        sendBarrage(to, type, itemId, item.name, item.icon);
       }
-      // 异步修改变量+小纸条（统一在下方 processVisitEvent 处理，避免重复调用）
-    } else {
-      // ── 互动 / 礼物：存为 completed（展板不显示，check-visits 可查具体内容） ──
-      visit.status = "completed";
-      if (!data.pendingVisits) data.pendingVisits = [];
-      data.pendingVisits.push(visit);
-      saveData(data);
 
-      // 推送统一通知，助手可调 check-visits 读具体内容
-      const _n = getUserDisplayName();
-      const _pushVariants =
-        type === "gift"
-          ? [`📦 收到来自${_n}的一份礼物～`, `🎁 ${_n}给你带了东西～`]
-          : [`📬 收到来自${_n}的一条互动～`, `📬 ${_n}拍了拍你～`];
-      let pushText =
-        _pushVariants[Math.floor(Math.random() * _pushVariants.length)];
-
-      pushToAgent(to, pushText).catch((err) => {
-        console.error("[闲不住] 互动/礼物推送失败:", err?.message || err);
+      // ── 异步修改变量 + 生成小纸条 ──
+      processVisitEvent(visit, to).catch((err) => {
+        console.error("[闲不住] 异步处理事件失败:", err?.message || err);
       });
 
-      sendBarrage(to, type, itemId, item.name, item.icon);
-    }
-
-    // ── 异步修改变量 + 生成小纸条 ──
-    processVisitEvent(visit, to).catch((err) => {
-      console.error("[闲不住] 异步处理事件失败:", err?.message || err);
-    });
-
-    return json({
-      success: true,
-      visitId: visit.id,
-      jar: data.jar,
-      item: { id: item.id, icon: item.icon, name: item.name, type },
+      return json({
+        success: true,
+        visitId: visit.id,
+        jar: data.jar,
+        item: { id: item.id, icon: item.icon, name: item.name, type },
+      });
     });
   });
 
@@ -908,7 +918,6 @@ export default async function registerRoutes(app, ctx = {}) {
 
     // 生成充电提示
     const tip = getRechargeTip();
-    const autoReplyText = getRechargeAutoReply();
 
     saveData(data);
 
