@@ -1,5 +1,22 @@
 # 闲不住 更新日志
 
+## v2.3.5 — 小纸条回归修复 + 细节修复
+
+### 🐛 真 bug 修复
+- **小纸条永不触发（回归）**：小纸条判断原本嵌在 `if (visit.status === "pending")` 分支里，但互动/礼物 visit 是 completed 状态，导致价格阶梯（≥150 必出）和 5% 概率全部失效。已把判断挪出 pending 分支并抽成纯函数 `shouldTriggerNote`，所有事件类型恢复正常
+
+### 🔧 修复
+- **/api/data 写盘**：装饰迁移之外不再每次 GET 都 saveData（changelog 承诺兑现）
+- **凌晨工作量漏算**：scanWorkStats 补 mtime 兜底（会话文件名是 UTC 日期，北京 00:00-08:00 的新会话匹配不上文件名前缀）
+- **关机键不再要求配置插件模型**：恶作剧类（关机键/说怪话）豁免模型检查，与 changelog 声明一致
+- **并发丢更新防护**：processVisitEvent 加串行队列，多个事件不再并发 load-modify-save 竞争
+- **本地 .gitignore**：补全排除规则（_backups、.hallmark 等）
+
+### 🔧 开发
+- 新增 shouldTriggerNote 回归测试（含价格阶梯与概率档位），共 17 条
+
+---
+
 ## v2.3.4 — 代码健康度修复
 
 ### 🔧 修复

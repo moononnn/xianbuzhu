@@ -16,6 +16,7 @@ import {
   recordEvent,
   getAffectionStage,
 } from "../lib/data.js";
+import { shouldTriggerNote } from "../lib/llm.js";
 
 // ─── computeMoodShift：昨日事件 → 心情修正 ───
 
@@ -190,6 +191,23 @@ test("recordEvent: 追加事件到今日 partners，兼容无记录", () => {
   assert.equal(events[0].itemName, "一枝花");
   assert.equal(events[0].price, 70);
   assert.ok(events[0].ts);
+});
+
+// ─── shouldTriggerNote：小纸条触发判断（回归测试：曾因嵌在 pending 分支永不触发） ───
+
+test("shouldTriggerNote: 礼物 ≥150 必出，其他档位按概率", (t) => {
+  assert.equal(shouldTriggerNote({ type: "gift", price: 150 }), true);
+  assert.equal(shouldTriggerNote({ type: "gift", price: 999 }), true);
+  // 低价位档：随机 0 必出
+  t.mock.method(Math, "random", () => 0);
+  assert.equal(shouldTriggerNote({ type: "gift", price: 10 }), true);
+  // 随机 0.99 必不出
+  t.mock.method(Math, "random", () => 0.99);
+  assert.equal(shouldTriggerNote({ type: "gift", price: 10 }), false);
+  assert.equal(shouldTriggerNote({ type: "gift", price: 70 }), false); // 0.4 档
+  assert.equal(shouldTriggerNote({ type: "interact" }), false); // 5% 档
+  assert.equal(shouldTriggerNote({ type: "prank" }), false);
+  assert.equal(shouldTriggerNote({ type: "unknown" }), false);
 });
 
 test("getAffectionStage: 负好感返回疏远（与 describeAffection 口径一致）", () => {

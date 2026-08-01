@@ -209,6 +209,7 @@ export default async function registerRoutes(app, ctx = {}) {
     const newAvailable = Math.max(0, todayTotal - todayClaimed);
 
     const partners = [];
+    let decoMigrated = false;
     for (const [id, info] of Object.entries(partnerConfig)) {
       const p = today.partners[id];
       const act = activity[id] || {};
@@ -265,6 +266,7 @@ export default async function registerRoutes(app, ctx = {}) {
         }
         info.decorations = newDeco;
         deco = newDeco;
+        decoMigrated = true;
       }
 
       partners.push({
@@ -323,7 +325,10 @@ export default async function registerRoutes(app, ctx = {}) {
       sectionTitle = `大家都在各忙各的${i > 0 ? `，只有${idleList.map((p) => p.name).join("和")}在摸鱼` : ""}`;
     }
 
-    saveData(data);
+    // 装饰迁移发生时才会写盘（平时 GET 不写盘）
+    if (decoMigrated) {
+      saveData(data);
+    }
     // 是否有小纸条（控制小纸条按钮是否显示）
     const hasNotes = Object.values(data.notes || {}).some(
       (arr) => arr && arr.length > 0,
@@ -745,9 +750,9 @@ export default async function registerRoutes(app, ctx = {}) {
       return json({ success: true, jar: data.jar, injected: true });
     }
 
-    // ── 检查模型是否已配置 ──
+    // ── 检查模型是否已配置（恶作剧豁免：关机键/说怪话不依赖插件模型） ──
     const llmOk = !!(data.llmConfig?.providerId && data.llmConfig?.modelId);
-    if (!llmOk) {
+    if (!llmOk && type !== "prank") {
       return json(
         {
           success: false,
