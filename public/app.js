@@ -184,14 +184,13 @@
       }
       html += '</div>';
       html += '<div class="board-doing">' + escapeHtml(p.doing) + '</div>';
-      // 变量展示（mood 阈值与 lib/data.js describeMood 统一：80/65/40/25）
+      // 变量展示（状态档位由后端统一计算并返回，前端不再自行解释数值）
       if (p.variables) {
         var v = p.variables;
-        var moodEmoji = v.mood >= 80 ? '\uD83D\uDE04' : v.mood >= 65 ? '\uD83D\uDE0C' : v.mood >= 40 ? '\uD83D\uDE10' : v.mood >= 25 ? '\uD83D\uDE11' : '\uD83D\uDE29';
-        var moodLabel = v.mood >= 80 ? '心情很好' : v.mood >= 65 ? '心情不错' : v.mood >= 40 ? '心情平稳' : v.mood >= 25 ? '有点闷' : '心情很差';
+        var moodEmoji = p.moodEmoji || '\uD83D\uDE10';
+        var moodLabel = p.moodLabel || '';
         var energyPct = Math.max(0, Math.min(100, v.energy || 0));
-        // energy 颜色阈值与 describeEnergy 统一：70/40/20
-        var energyColor = energyPct >= 70 ? '#4CAF50' : energyPct >= 40 ? '#FF9800' : '#f44336';
+        var energyColor = p.energyClass === 'good' ? '#4CAF50' : p.energyClass === 'mid' ? '#FF9800' : '#f44336';
         html += '<div class="board-vars">';
         html += '<div class="var-energy"><span class="energy-icon">\uD83D\uDD0B</span><div class="energy-bar-bg"><div class="energy-bar-fill" style="width:' + energyPct + '%;background:' + energyColor + '"></div></div><span class="energy-num">' + v.energy + '</span></div>';
         html += '<span class="var-mood" title="' + moodLabel + '">' + moodEmoji + '</span>';
@@ -979,11 +978,12 @@
               } catch (e) {}
               setTimeout(clearPersistentToast, 2000);
             } else if (data.brainrot) {
-              // 注入失败，显示文本让用户看到
+              // 注入失败：展示怪话内容 + 明确告知未送达（不再静默）
               clearPersistentToast();
-              toast('🧠 ' + data.brainrot);
+              toast('🧠 怪话生成了，但她好像不在线，没送达：' + data.brainrot);
             } else {
               clearPersistentToast();
+              toast('🧠 怪话没送达，她好像不在');
             }
           } else {
             clearPersistentToast();

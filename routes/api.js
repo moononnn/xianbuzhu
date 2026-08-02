@@ -20,7 +20,15 @@ import {
   isRechargedToday,
   markRechargedToday,
   recordEvent,
+  getMoodLevel,
+  getEnergyLevel,
+  collectPendingDeliveries,
+  markDelivered,
+  markDeliveryFailed,
 } from "../lib/data.js";
+import { isValidAgentId } from "../lib/validate.js";
+// re-export 保持向后兼容（旧测试/旧调用从 routes/api.js 引入）
+export { isValidAgentId };
 import {
   getAvailableModels,
   getLLMConfig,
@@ -44,11 +52,134 @@ const PUBLIC_DIR = path.join(__dirname, "..", "public");
 const HANA_HOME = process.env.HANA_HOME || path.join(os.homedir(), ".hanako");
 
 // ─── 数据写锁：load-modify-save 串行化，防止并发请求互相覆盖丢更新 ───
+// 纪律：withDataLock 回调内不得出现 await（必须是纯同步段），
+//      否则锁内让出事件循环，同步原子性丢失，并发竞争会回归
 let _dataLock = Promise.resolve();
 function withDataLock(fn) {
   const run = _dataLock.then(fn);
   _dataLock = run.catch(() => {});
   return run;
+}
+
+// ─── 当前注册的 ctx 引用（热重载/重复 register 时让存活的闭包用最新 bus） ───
+let _registeredCtx = null;
+
+// ─── 补投递定时任务句柄（模块级，避免 register 重复调用时产生双定时器） ───
+let _deliveryTimer = null;
+
+// ─── 推送消息到目标助手的对话框（失败重试：助手流式输出时 session:send 会抛 session_busy） ───
+// 模块级定义：bus 取最新注册的 ctx（热重载后旧闭包也能用新 bus）
+async function pushToAgent(agentId, text) {
+  const bus = _registeredCtx?.bus || _registeredCtx?._bus;
+  if (!bus) {
+    console.warn("[闲不住] 推送失败: bus 不可用");
+    return false;
+  }
+  const sessionId = await findLatestSessionId(agentId);
+  if (!sessionId) {
+    console.warn(`[闲不住] 推送失败: 未找到 ${agentId} 的会话 ID`);
+    return false;
+  }
+
+  // 会话忙（流式输出中）时等待重试：2s / 5s / 10s，最多 3 次；非忙碌错误不重试
+  const delays = [2000, 5000, 10000];
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await bus.request("session:send", { text, sessionId });
+      console.log(
+        `[闲不住] 推送成功 → ${agentId} 会话 ${sessionId.slice(0, 20)}...`,
+      );
+      return true;
+    } catch (e) {
+      const msg = e?.message || String(e);
+      const busy = /busy/i.test(msg);
+      if (!busy || attempt >= delays.length) {
+        console.error(
+          `[闲不住] 推送失败${busy ? `（会话忙，重试 ${delays.length} 次后仍失败）` : "（非忙碌错误）"}:`,
+          msg,
+        );
+        return false;
+      }
+      const delay = delays[attempt];
+      console.log(
+        `[闲不住] 会话忙，${delay / 1000}s 后重试 (${attempt + 1}/${delays.length})`,
+      );
+      await new Promise((r) => setTimeout(r, delay));
+    }
+  }
+}
+
+// ─── 补投递：把推送失败的事件重投（「信箱」机制） ───
+// 触发点：注册时启动 60s 定时任务 + 每次 /api/visit 顺带触发一次
+// 状态迁移见 lib/data.js 的 collectPendingDeliveries / markDelivered / markDeliveryFailed
+// （导出供单元测试直接调用）
+let _delivering = false;
+let _lastVisitTriggerTs = 0;
+export async function retryPendingDeliveries(fromVisit = false) {
+  if (_delivering) return; // 防重入：上一轮还在跑（可能卡在会话重试）时跳过
+  // 节流：高频互动时 visit 触发不密集扫描（定时器触发不受限）
+  if (fromVisit) {
+    const now = Date.now();
+    if (now - _lastVisitTriggerTs < 30000) return;
+    _lastVisitTriggerTs = now;
+  }
+  _delivering = true;
+  try {
+    let candidates = [];
+    await withDataLock(() => {
+      const data = loadData();
+      candidates = collectPendingDeliveries(data);
+    });
+    if (candidates.length === 0) return;
+
+    for (const v of candidates) {
+      const text = buildDeliveryText(v);
+      let ok = false;
+      try {
+        ok = await pushToAgent(v.to, text);
+      } catch (e) {
+        console.error("[闲不住] 补投递异常:", e?.message || e);
+      }
+      await withDataLock(() => {
+        const data = loadData();
+        if (ok) {
+          if (markDelivered(data, v.id)) {
+            console.log(`[闲不住] 补投递成功: ${v.type} → ${v.to}`);
+            saveData(data);
+          }
+        } else {
+          if (markDeliveryFailed(data, v.id)) {
+            console.warn(
+              `[闲不住] 补投递放弃: ${v.id}（尝试达上限，保留记录不再重试）`,
+            );
+          }
+          saveData(data);
+        }
+      });
+    }
+  } finally {
+    _delivering = false;
+  }
+}
+
+// ─── 补投递重试文案（与首次推送同款，避免突兀） ───
+function buildDeliveryText(visit) {
+  const _n = getUserDisplayName();
+  if (visit.type === "gift") return `📦 收到来自${_n}的一份礼物～`;
+  if (visit.type === "recharge") return `⚡ 收到来自${_n}的充电～`;
+  return `📬 收到来自${_n}的一条互动～`;
+}
+
+// ─── 注册补投递定时任务（60s 一次，防重入；unref 不阻塞进程退出） ───
+function scheduleDeliveryRetry() {
+  if (_deliveryTimer) return;
+  _deliveryTimer = setInterval(() => {
+    retryPendingDeliveries(false).catch((e) => {
+      console.error("[闲不住] 补投递定时任务异常:", e?.message || e);
+    });
+  }, 60000);
+  if (_deliveryTimer.unref) _deliveryTimer.unref();
+  console.log("[闲不住] 补投递定时任务已启动（60s 周期）");
 }
 
 // ─── 将最新会话文件解析为 sess_xxx ID（零依赖，不依赖 sqlite3 CLI） ───
@@ -116,20 +247,6 @@ function json(data, status = 200) {
   });
 }
 
-// ─── 助手 ID 校验：字符白名单 + 拒绝原型链特殊键 ───
-// 用途：to/partner 等会进入路径拼接或对象键写入的参数，
-// 白名单阻止路径穿越（../），拒绝 __proto__ 等防止原型污染
-// （导出以便单元测试）
-export function isValidAgentId(id) {
-  return (
-    typeof id === "string" &&
-    id.length > 0 &&
-    id.length <= 100 &&
-    /^[a-zA-Z0-9_-]+$/.test(id) &&
-    !["__proto__", "constructor", "prototype"].includes(id)
-  );
-}
-
 // ─── 渲染页面 ───
 function renderPage(token) {
   let css = "",
@@ -161,6 +278,8 @@ function renderPage(token) {
 //  路由注册
 // ==========================================
 export default async function register(app, ctx = {}) {
+  _registeredCtx = ctx; // 供存活闭包（补投递定时器等）使用最新 ctx
+  scheduleDeliveryRetry(); // 补投递定时任务（模块级防重，只启动一次）
   // 读取插件版本号
   let pluginVersion = "0.1.0";
   try {
@@ -290,6 +409,10 @@ export default async function register(app, ctx = {}) {
         decoMigrated = true;
       }
 
+      const infoVars = info.variables || null;
+      const moodLevel = infoVars ? getMoodLevel(infoVars.mood) : null;
+      const energyLevel = infoVars ? getEnergyLevel(infoVars.energy) : null;
+
       partners.push({
         id,
         name: info.name,
@@ -297,7 +420,12 @@ export default async function register(app, ctx = {}) {
         active,
         doing,
         avatarUrl: hasAvatar ? `/api/avatar/${id}` : "",
-        variables: info.variables || null,
+        variables: infoVars,
+        // 状态档位由后端统一计算（单一事实源，前端不再自行解释数值）
+        moodLabel: moodLevel?.label || "",
+        moodEmoji: moodLevel?.emoji || "",
+        energyLabel: energyLevel?.label || "",
+        energyClass: energyLevel?.cls || "",
         decorations: deco || {
           owned: { avatarFrame: [], cardBg: [], title: [] },
           equipped: { avatarFrame: null, cardBg: null, title: null },
@@ -440,47 +568,6 @@ export default async function register(app, ctx = {}) {
   //  POST /api/visit — 互动 / 礼物 / 恶作剧（推送模式）
   //  不再依赖 pendingVisits + check-visits，直接推送到助手对话框
   // ════════════════════════════════════════
-
-  // ─── 推送消息到目标助手的对话框（失败重试：助手流式输出时 session:send 会抛 session_busy） ───
-  async function pushToAgent(agentId, text) {
-    const bus = ctx.bus || ctx._bus;
-    if (!bus) {
-      console.warn("[闲不住] 推送失败: bus 不可用");
-      return false;
-    }
-    const sessionId = await findLatestSessionId(agentId);
-    if (!sessionId) {
-      console.warn(`[闲不住] 推送失败: 未找到 ${agentId} 的会话 ID`);
-      return false;
-    }
-
-    // 会话忙（流式输出中）时等待重试：2s / 5s / 10s，最多 3 次；非忙碌错误不重试
-    const delays = [2000, 5000, 10000];
-    for (let attempt = 0; ; attempt++) {
-      try {
-        await bus.request("session:send", { text, sessionId });
-        console.log(
-          `[闲不住] 推送成功 → ${agentId} 会话 ${sessionId.slice(0, 20)}...`,
-        );
-        return true;
-      } catch (e) {
-        const msg = e?.message || String(e);
-        const busy = /busy/i.test(msg);
-        if (!busy || attempt >= delays.length) {
-          console.error(
-            `[闲不住] 推送失败${busy ? `（会话忙，重试 ${delays.length} 次后仍失败）` : "（非忙碌错误）"}:`,
-            msg,
-          );
-          return false;
-        }
-        const delay = delays[attempt];
-        console.log(
-          `[闲不住] 会话忙，${delay / 1000}s 后重试 (${attempt + 1}/${delays.length})`,
-        );
-        await new Promise((r) => setTimeout(r, delay));
-      }
-    }
-  }
 
   // ─── 弹幕模板（好感 x 心情双维度） ───
   const DANMU_TEMPLATES = {
@@ -702,61 +789,72 @@ export default async function register(app, ctx = {}) {
   }
 
   app.post("/api/visit", async (c) => {
-    // 串行锁：visit 创建（load-modify-save）整体原子化，防止并发连点丢记录
-    return withDataLock(async () => {
-      const input = await readBody(c);
-      const data = loadData();
+    // 锁范围设计：只有 load-modify-save（读数据→扣光粒→建事件→写盘）在短锁内；
+    // 模型生成、消息推送（含 2/5/10s 重试等待）全部在锁外，
+    // 避免一个请求等待繁忙会话时阻塞其他所有互动请求
+    const input = await readBody(c);
+    const { type, itemId, to } = input;
 
-      const { type, itemId, to } = input;
+    if (!type || !itemId || !to) {
+      return json({ success: false, error: "缺少必要参数" }, 400);
+    }
 
-      if (!type || !itemId || !to) {
-        return json({ success: false, error: "缺少必要参数" }, 400);
-      }
+    // 输入校验：type 白名单 + 长度限制（锁外，纯校验不碰数据）
+    const validTypes = ["interact", "gift", "prank"];
+    if (!validTypes.includes(type)) {
+      return json({ success: false, error: "无效的互动类型" }, 400);
+    }
+    if (
+      typeof itemId !== "string" ||
+      itemId.length > 50 ||
+      !isValidAgentId(to)
+    ) {
+      return json({ success: false, error: "参数格式错误" }, 400);
+    }
 
-      // 输入校验：type 白名单 + 长度限制
-      const validTypes = ["interact", "gift", "prank"];
-      if (!validTypes.includes(type)) {
-        return json({ success: false, error: "无效的互动类型" }, 400);
-      }
-      if (
-        typeof itemId !== "string" ||
-        itemId.length > 50 ||
-        !isValidAgentId(to)
-      ) {
-        return json({ success: false, error: "参数格式错误" }, 400);
-      }
+      // 顺带触发一次补投递（fire-and-forget，不阻塞当前请求；带 30s 节流）
+      retryPendingDeliveries(true).catch((e) => {
+        console.error("[闲不住] 补投递任务异常:", e?.message || e);
+      });
 
-      let item;
+    // 商品/互动查找（锁外只读）
+    let item;
+    {
+      const d = loadData();
       if (type === "interact") {
-        item = (data.interactItems || []).find((i) => i.id === itemId);
+        item = (d.interactItems || []).find((i) => i.id === itemId);
       } else if (type === "prank") {
-        item = (data.prankItems || []).find((i) => i.id === itemId);
+        item = (d.prankItems || []).find((i) => i.id === itemId);
       } else if (type === "gift") {
-        item = (data.shopItems || []).find((i) => i.id === itemId);
+        item = (d.shopItems || []).find((i) => i.id === itemId);
+      }
+    }
+    if (!item) return json({ success: false, error: "项目不存在" }, 400);
+
+    // ── 恶作剧：说怪话（brainrot） ──
+    // 先生成再扣费：生成失败不扣光粒（旧版先扣后生成，失败白扣）
+    if (type === "prank" && itemId === "brainrot") {
+      const prankCost = 3;
+      // 快检光粒（锁外只读，避免白调模型；锁内会再校验一次）
+      if ((loadData().jar || 0) < prankCost) {
+        return json({ success: false, error: "光粒不够了 ✨" }, 400);
       }
 
-      if (!item) return json({ success: false, error: "项目不存在" }, 400);
+      // 生成怪话（锁外：模型调用可能耗时数秒；有意不传外部 signal，
+      // 依赖 callLLM 内部 30s 超时兑底，避免请求悬挂）
+      const brainrotText = await generateBrainrot();
+      if (!brainrotText) {
+        // 注意：generateBrainrot 内部有备选文案兑底，正常不会走到这里
+        return json({ success: false, error: "怪话生成失败" }, 500);
+      }
 
-      // ── 恶作剧前置处理 ──
-      if (type === "prank" && itemId === "brainrot") {
-        // 扣光粒
-        const prankCost = 3;
+      // 短锁：扣光粒 + 建事件 + 写盘
+      const created = await withDataLock(() => {
+        const data = loadData();
         if ((data.jar || 0) < prankCost) {
-          return json({ success: false, error: "光粒不够了 ✨" }, 400);
+          return { ok: false, error: "光粒不够了 ✨" };
         }
         data.jar -= prankCost;
-
-        // 生成怪话
-        const brainrotText = await generateBrainrot();
-        if (!brainrotText) {
-          return json({ success: false, error: "怪话生成失败" }, 500);
-        }
-
-        // 推送
-        const ok = await pushToAgent(to, brainrotText);
-
-        // 创建 visit 记录并异步修改变量
-        if (!data.pendingVisits) data.pendingVisits = [];
         const visit = {
           id: nextId(),
           type,
@@ -769,54 +867,71 @@ export default async function register(app, ctx = {}) {
           createdAt: nowISO(),
           status: "completed",
         };
+        if (!data.pendingVisits) data.pendingVisits = [];
         data.pendingVisits.push(visit);
         saveData(data);
+        return { ok: true, jar: data.jar, visit };
+      });
+      if (!created.ok) {
+        return json({ success: false, error: created.error }, 400);
+      }
 
-        processVisitEvent(visit, to).catch((err) => {
-          console.error("[闲不住] 脑洞袭击变量更新失败:", err?.message || err);
+      // 锁外：推送 + 异步变量 + 弹幕
+      const ok = await pushToAgent(to, brainrotText);
+      processVisitEvent(created.visit, to).catch((err) => {
+        console.error("[闲不住] 脑洞袭击变量更新失败:", err?.message || err);
+      });
+      sendBarrage(to, "prank", "brainrot", "说怪话", "");
+
+      if (!ok) {
+        return json({
+          success: true,
+          jar: created.jar,
+          brainrot: brainrotText,
+          injected: false,
         });
-
-        sendBarrage(to, "prank", "brainrot", "说怪话", "");
-
-        if (!ok) {
-          return json({
-            success: true,
-            jar: data.jar,
-            brainrot: brainrotText,
-            injected: false,
-          });
-        }
-        return json({ success: true, jar: data.jar, injected: true });
       }
+      return json({ success: true, jar: created.jar, injected: true });
+    }
 
-      // ── 检查模型是否已配置（恶作剧豁免：关机键/说怪话不依赖插件模型） ──
-      const llmOk = !!(data.llmConfig?.providerId && data.llmConfig?.modelId);
-      if (!llmOk && type !== "prank") {
-        return json(
-          {
-            success: false,
-            error: "请先打开闲不住页面底部「模型设置」配置模型后再使用",
-          },
-          400,
-        );
-      }
+    // ── 检查模型是否已配置（恶作剧豁免：关机键/说怪话不依赖插件模型） ──
+    const llmOk = !!(loadData().llmConfig?.providerId && loadData().llmConfig?.modelId);
+    if (!llmOk && type !== "prank") {
+      return json(
+        {
+          success: false,
+          error: "请先打开闲不住页面底部「模型设置」配置模型后再使用",
+        },
+        400,
+      );
+    }
 
-      // ── 光粒变动 ──
+    // ── 关机键（unplug）：先生成崩溃剧本（锁外，有意不传外部 signal，
+    //    依赖 callLLM 内部 30s 超时兑底），再短锁建 pending 事件 ──
+    let crashReply = "";
+    if (type === "prank" && itemId === "unplug") {
+      crashReply = await generateCrashReply(to);
+    }
+
+    // ── 短锁：扣光粒 + 建事件 + 写盘（互动/礼物/其他恶作剧共用） ──
+    const created = await withDataLock(() => {
+      const data = loadData();
+
+      // 光粒变动
       if (type === "gift") {
         if ((data.jar || 0) < item.price) {
-          return json({ success: false, error: "光粒不够了 ✨" }, 400);
+          return { ok: false, error: "光粒不够了 ✨" };
         }
         data.jar -= item.price;
         data.jar += 3; // 送礼回礼：助手回赠 3 光粒，让送礼不亏太多
       } else if (type === "prank") {
         const prankCost = itemId === "unplug" ? 5 : 3;
         if ((data.jar || 0) < prankCost) {
-          return json({ success: false, error: "光粒不够了 ✨" }, 400);
+          return { ok: false, error: "光粒不够了 ✨" };
         }
         data.jar -= prankCost;
       }
 
-      // ── 创建 visit 记录（存但不推 pendingVisits，用于变量修改和小纸条） ──
       const visit = {
         id: nextId(),
         type,
@@ -827,93 +942,112 @@ export default async function register(app, ctx = {}) {
         to,
         from: "owner",
         createdAt: nowISO(),
-        status: "pushed",
+        status: type === "prank" && itemId === "unplug" ? "pending" : "completed",
       };
+      if (crashReply) {
+        visit.autoReply = crashReply;
+        console.log("[闲不住] 崩溃剧本已生成，长度：" + crashReply.length);
+      }
+      if (!data.pendingVisits) data.pendingVisits = [];
+      data.pendingVisits.push(visit);
+      saveData(data);
+      return { ok: true, jar: data.jar, visit };
+    });
+    if (!created.ok) {
+      return json({ success: false, error: created.error }, 400);
+    }
 
-      // 推送结果（互动/礼物/充电 await 等待，界面只显示真实送达状态；unplug 走独立流程）
-      let pushOk = true;
+    // ── 锁外：推送（等待真实结果，界面只显示真实送达状态） ──
+    let pushOk = true;
+    if (type === "prank" && itemId === "unplug") {
+      // 弹幕在 abort 之前发送，避免 abort 中断后续请求
+      sendBarrage(to, "prank", "unplug", "关机键", "");
 
-      if (type === "prank" && itemId === "unplug") {
-        // ── 关机键：生成崩溃剧本 → 存 pendingVisit → abort → 推送「重启！」──
-        const crashReply = await generateCrashReply(to);
-        if (crashReply) {
-          visit.autoReply = crashReply;
-          console.log("[闲不住] 崩溃剧本已生成，长度：" + crashReply.length);
-        }
-        if (!data.pendingVisits) data.pendingVisits = [];
-        visit.status = "pending";
-        data.pendingVisits.push(visit);
-        saveData(data);
-
-        // 弹幕在 abort 之前发送，避免 abort 中断后续请求
-        sendBarrage(to, "prank", "unplug", "关机键", "");
-
-        try {
-          const bus = ctx.bus || ctx._bus;
-          const latestSession = findLatestSessionPath(to);
-          if (bus && latestSession) {
-            await bus.request("session:abort", {
-              sessionPath: latestSession,
-              reason: "悄咪咪按了关机键 🔌",
-            });
-            console.log("[闲不住] abort 完成 → " + to);
-            await bus.request("session:send", {
-              text: "重启！",
-              sessionPath: latestSession,
-            });
-            console.log("[闲不住] 关机键「重启！」注入成功 → " + to);
-            pushOk = true;
-          } else {
-            pushOk = false;
-          }
-        } catch (e) {
-          console.error("[闲不住] 关机键处理失败:", e?.message || e);
+      try {
+        const bus = _registeredCtx?.bus || _registeredCtx?._bus || ctx.bus || ctx._bus;
+        const latestSession = findLatestSessionPath(to);
+        if (bus && latestSession) {
+          await bus.request("session:abort", {
+            sessionPath: latestSession,
+            reason: "悄咪咪按了关机键 🔌",
+          });
+          console.log("[闲不住] abort 完成 → " + to);
+          await bus.request("session:send", {
+            text: "重启！",
+            sessionPath: latestSession,
+          });
+          console.log("[闲不住] 关机键「重启！」注入成功 → " + to);
+          pushOk = true;
+        } else {
           pushOk = false;
         }
-        // 异步修改变量+小纸条（统一在下方 processVisitEvent 处理，避免重复调用）
-      } else {
-        // ── 互动 / 礼物：存为 completed（展板不显示，check-visits 可查具体内容） ──
-        visit.status = "completed";
-        if (!data.pendingVisits) data.pendingVisits = [];
-        data.pendingVisits.push(visit);
-        saveData(data);
-
-        // 推送统一通知，助手可调 check-visits 读具体内容
-        const _n = getUserDisplayName();
-        const _pushVariants =
-          type === "gift"
-            ? [`📦 收到来自${_n}的一份礼物～`, `🎁 ${_n}给你带了东西～`]
-            : [`📬 收到来自${_n}的一条互动～`, `📬 ${_n}拍了拍你～`];
-        let pushText =
-          _pushVariants[Math.floor(Math.random() * _pushVariants.length)];
-
-        // 等待推送结果（与怪话流程同思路：只有真实送达才显示成功）
-        try {
-          pushOk = await pushToAgent(to, pushText);
-        } catch (err) {
-          console.error("[闲不住] 互动/礼物推送失败:", err?.message || err);
-        }
-        if (!pushOk) {
-          console.warn(
-            `[闲不住] 互动/礼物未送达: ${to}（未找到会话或推送失败）`,
+      } catch (e) {
+        console.error("[闲不住] 关机键处理失败:", e?.message || e);
+        pushOk = false;
+      }
+      if (!pushOk) {
+        // 注入失败：事件不能无限滞留 pending（助手只在收到「重启！」时才读它，
+        // 注入已失败则永远不会被消费，前端会一直显示待处理）。降级为 received：
+        // 不再显示待处理，崩溃剧本保留在数据中供排查，下次成功关机时用新剧本
+        console.warn(
+          `[闲不住] 关机键注入失败: ${to}（事件已标记为已读，避免滞留待处理）`,
+        );
+        await withDataLock(() => {
+          const data = loadData();
+          const cur = data.pendingVisits?.find(
+            (x) => x.id === created.visit.id,
           );
-        }
+          if (cur && cur.status === "pending") {
+            cur.status = "received";
+            saveData(data);
+          }
+        });
+      }
+    } else {
+      // 互动 / 礼物 / 其他恶作剧：推送统一通知，助手可调 check-visits 读具体内容
+      const _n = getUserDisplayName();
+      const _pushVariants =
+        type === "gift"
+          ? [`📦 收到来自${_n}的一份礼物～`, `🎁 ${_n}给你带了东西～`]
+          : [`📬 收到来自${_n}的一条互动～`, `📬 ${_n}拍了拍你～`];
+      let pushText =
+        _pushVariants[Math.floor(Math.random() * _pushVariants.length)];
 
-        sendBarrage(to, type, itemId, item.name, item.icon);
+      try {
+        pushOk = await pushToAgent(to, pushText);
+      } catch (err) {
+        console.error("[闲不住] 互动/礼物推送失败:", err?.message || err);
+      }
+      if (!pushOk) {
+        console.warn(
+          `[闲不住] 互动/礼物未送达: ${to}（未找到会话或推送失败，已进入补投递队列）`,
+        );
+        // 补投递标记：推送失败的事件进「信箱」，稍后由定时任务重投
+        await withDataLock(() => {
+          const data = loadData();
+          const cur = data.pendingVisits?.find((x) => x.id === created.visit.id);
+          if (cur) {
+            cur.deliveryPending = true;
+            cur.deliveryAttempts = 0;
+            saveData(data);
+          }
+        });
       }
 
-      // ── 异步修改变量 + 生成小纸条 ──
-      processVisitEvent(visit, to).catch((err) => {
-        console.error("[闲不住] 异步处理事件失败:", err?.message || err);
-      });
+      sendBarrage(to, type, itemId, item.name, item.icon);
+    }
 
-      return json({
-        success: true,
-        visitId: visit.id,
-        jar: data.jar,
-        pushed: pushOk,
-        item: { id: item.id, icon: item.icon, name: item.name, type },
-      });
+    // ── 异步修改变量 + 生成小纸条 ──
+    processVisitEvent(created.visit, to).catch((err) => {
+      console.error("[闲不住] 异步处理事件失败:", err?.message || err);
+    });
+
+    return json({
+      success: true,
+      visitId: created.visit.id,
+      jar: created.jar,
+      pushed: pushOk,
+      item: { id: item.id, icon: item.icon, name: item.name, type },
     });
   });
 
@@ -922,53 +1056,65 @@ export default async function register(app, ctx = {}) {
   // ════════════════════════════════════════
   app.post("/api/recharge", async (c) => {
     const input = await readBody(c);
-    const data = loadData();
     const { to } = input;
 
-    // 助手 ID 白名单校验（防路径穿越/原型污染）
+    // 助手 ID 白名单校验（防路径穿越/原型污染；锁外纯校验）
     if (!isValidAgentId(to)) {
       return json({ success: false, error: "助手 ID 不合法" }, 400);
     }
 
-    // 检查今天是否已充过
-    if (isRechargedToday(data, to)) {
+    // 同步数据段统一走短锁（与 /api/visit 同一锁纪律：锁内无 await）
+    const created = await withDataLock(() => {
+      const data = loadData();
+
+      // 检查今天是否已充过
+      if (isRechargedToday(data, to)) {
+        return { ok: false, alreadyRecharged: true, error: "今天已经充过啦 ⚡" };
+      }
+
+      // 检查光粒
+      const RECHARGE_COST = 50;
+      if ((data.jar || 0) < RECHARGE_COST) {
+        return { ok: false, error: "光粒不够了 ✨" };
+      }
+
+      // 检查助手是否存在
+      const partnerCfg = data.partnerConfig?.[to];
+      if (!partnerCfg) return { ok: false, error: "助手不存在" };
+
+      // 扣光粒
+      data.jar -= RECHARGE_COST;
+
+      // 体力拉满
+      partnerCfg.variables.energy = 100;
+
+      // 标记今天已充
+      markRechargedToday(data, to);
+
+      // 记录事件（供次日心情推演）
+      recordEvent(data, to, {
+        type: "recharge",
+        itemId: "recharge",
+        itemName: "充电",
+        price: 0,
+      });
+
+      // 生成充电提示
+      const tip = getRechargeTip();
+
+      saveData(data);
+      return { ok: true, jar: data.jar, tip };
+    });
+    if (!created.ok) {
       return json(
-        { success: false, error: "今天已经充过啦 ⚡", alreadyRecharged: true },
+        {
+          success: false,
+          error: created.error,
+          ...(created.alreadyRecharged ? { alreadyRecharged: true } : {}),
+        },
         400,
       );
     }
-
-    // 检查光粒
-    const RECHARGE_COST = 50;
-    if ((data.jar || 0) < RECHARGE_COST) {
-      return json({ success: false, error: "光粒不够了 ✨" }, 400);
-    }
-
-    // 检查助手是否存在
-    const partnerCfg = data.partnerConfig?.[to];
-    if (!partnerCfg) return json({ success: false, error: "助手不存在" }, 400);
-
-    // 扣光粒
-    data.jar -= RECHARGE_COST;
-
-    // 体力拉满
-    partnerCfg.variables.energy = 100;
-
-    // 标记今天已充
-    markRechargedToday(data, to);
-
-    // 记录事件（供次日心情推演）
-    recordEvent(data, to, {
-      type: "recharge",
-      itemId: "recharge",
-      itemName: "充电",
-      price: 0,
-    });
-
-    // 生成充电提示
-    const tip = getRechargeTip();
-
-    saveData(data);
 
     // 推送统一充电通知到助手对话框（等待结果，界面只显示真实送达状态）
     const _chargeVariants = [
@@ -985,17 +1131,38 @@ export default async function register(app, ctx = {}) {
       console.error("[闲不住] 充电推送失败:", err?.message || err);
     }
     if (!pushOk) {
-      console.warn(`[闲不住] 充电通知未送达: ${to}`);
+      console.warn(`[闲不住] 充电通知未送达: ${to}（已进入补投递队列）`);
+      // 充电效果已生效（energy=100），但通知没送达：
+      // 建一条 deliveryPending 记录进「信箱」，由补投递任务稍后重投
+      await withDataLock(() => {
+        const data = loadData();
+        if (!data.pendingVisits) data.pendingVisits = [];
+        data.pendingVisits.push({
+          id: nextId(),
+          type: "recharge",
+          itemId: "recharge",
+          itemName: "充电",
+          icon: "⚡",
+          price: 0,
+          to,
+          from: "owner",
+          createdAt: nowISO(),
+          status: "completed",
+          deliveryPending: true,
+          deliveryAttempts: 0,
+        });
+        saveData(data);
+      });
     }
 
     sendBarrage(to, "recharge", "recharge", "充电", "");
 
     return json({
       success: true,
-      jar: data.jar,
+      jar: created.jar,
       energy: 100,
       pushed: pushOk,
-      tip,
+      tip: created.tip,
     });
   });
 
