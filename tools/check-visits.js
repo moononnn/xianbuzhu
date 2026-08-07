@@ -6,7 +6,7 @@ import { loadData, saveData, buildMoodContext } from '../lib/data.js';
 import { getUserDisplayName } from '../lib/activity.js';
 
 export const name = "check-visits";
-export const description = "当收到「重启！」这两个字时，必须立即调用此工具——会有演出剧本需要读取并作为回复开头。也用于检查来自用户的闲不住互动或待回复事件。";
+export const description = "当收到「重启！」这两个字时，必须立即调用此工具——会有演出剧本需要读取并作为回复开头。也用于检查来自用户的闲不住互动、礼物或待回复事件。当对话中出现「带了东西」「送了你」「礼物」「拍一拍」「闲不住」等互动提示时，调用本工具读取具体内容。";
 
 export const parameters = {
   type: "object",

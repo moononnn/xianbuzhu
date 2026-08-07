@@ -968,12 +968,18 @@ export default async function register(app, ctx = {}) {
         data.pendingVisits.push(visit);
         saveData(data);
 
-        // 推送统一通知，助手可调 check-visits 读具体内容
+        // 推送统一通知：带上礼物/互动名，助手一眼可知内容，可再调 check-visits 读细节
         const _n = getUserDisplayName();
         const _pushVariants =
           type === "gift"
-            ? [`📦 收到来自${_n}的一份礼物～`, `🎁 ${_n}给你带了东西～`]
-            : [`📬 收到来自${_n}的一条互动～`, `📬 ${_n}拍了拍你～`];
+            ? [
+                `📦 收到来自${_n}的一份礼物：${item.icon || ""}${item.name}～`,
+                `🎁 ${_n}给你带了东西：${item.icon || ""}${item.name}～`,
+              ]
+            : [
+                `📬 收到来自${_n}的一条互动：${item.icon || ""}${item.name}～`,
+                `📬 ${_n}拍了拍你：${item.icon || ""}${item.name}～`,
+              ];
         let pushText =
           _pushVariants[Math.floor(Math.random() * _pushVariants.length)];
 
