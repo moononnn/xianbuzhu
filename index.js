@@ -32,6 +32,7 @@ class WorkVisitPlugin {
             info.variables = oldConfig[id].variables;
           if (oldConfig[id]?.decorations)
             info.decorations = oldConfig[id].decorations;
+          if (oldConfig[id]?.hidden) info.hidden = oldConfig[id].hidden;
         }
         data.partnerConfig = scanned;
         saveData(data);

@@ -2,7 +2,6 @@
 // 更新我在闲不住展板上的状态文字
 
 import { loadData, saveData, todayStr } from "../lib/data.js";
-import { isValidAgentId } from "../lib/validate.js";
 
 export const name = "update-status";
 export const description =
@@ -32,12 +31,9 @@ export async function execute(args, ctx = {}) {
       };
     }
     // 默认写自己（调用方 agent），而不是写死 'hanako'（通用设计：其他用户默认 agent 不叫 hanako）
-    // 与接口层同一校验规则：非法 partner（__proto__/路径分隔符等）回退到调用方自己，
-    // 防止实例级原型污染与规则分叉
-    const rawPid = typeof args?.partner === "string" ? args.partner : "";
     const pid =
-      rawPid && isValidAgentId(rawPid)
-        ? rawPid
+      typeof args?.partner === "string" && args.partner.length <= 100
+        ? args.partner
         : ctx.agentId || ctx.agent?.id || ctx.session?.agentId || "hanako";
     if (!data.days[ts].partners[pid]) {
       data.days[ts].partners[pid] = {

@@ -2,7 +2,7 @@
 // 轻量工具：让助手感受自己当下的好感和心情状态
 // 在新对话开始时调用，助手能够自然内化当前的情绪基调
 
-import { loadData, getAffectionStage, MOOD_THRESHOLDS, ENERGY_THRESHOLDS } from "../lib/data.js";
+import { loadData, getAffectionStage } from "../lib/data.js";
 import { getUserDisplayName } from "../lib/activity.js";
 
 export const name = "sense-state";
@@ -51,22 +51,20 @@ export async function execute(args, ctx = {}) {
     const stage = getAffectionStage(vars.affection);
     const userName = getUserDisplayName() || "对方";
 
-    // 心境描述（档位来自 lib/data.js MOOD_THRESHOLDS 单一事实源，文案保留本工具的口语化版本）
-    const moodIdx = MOOD_THRESHOLDS.findIndex((t) => vars.mood >= t.min);
-    const MOOD_DESC = [
-      "心里很轻快",
-      "心情还不错，平稳中带点暖意",
-      "说不上特别好，但也还行",
-      "有点闷，不太想多说话",
-      "心情不太好，感觉沉沉的",
-    ];
-    const moodDesc = MOOD_DESC[moodIdx === -1 ? MOOD_DESC.length - 1 : moodIdx];
+    // 心境描述
+    let moodDesc = "";
+    if (vars.mood >= 80) moodDesc = "心里很轻快";
+    else if (vars.mood >= 65) moodDesc = "心情还不错，平稳中带点暖意";
+    else if (vars.mood >= 40) moodDesc = "说不上特别好，但也还行";
+    else if (vars.mood >= 25) moodDesc = "有点闷，不太想多说话";
+    else moodDesc = "心情不太好，感觉沉沉的";
 
-    // 体力描述（档位来自 lib/data.js ENERGY_THRESHOLDS，文案保留本工具版本）
-    const energyIdx = ENERGY_THRESHOLDS.findIndex((t) => vars.energy >= t.min);
-    const ENERGY_DESC = ["精神挺好的", "不算太累", "有一点疲惫感", "有点累了，想歇一歇"];
-    const energyDesc =
-      ENERGY_DESC[energyIdx === -1 ? ENERGY_DESC.length - 1 : energyIdx];
+    // 体力描述
+    let energyDesc = "";
+    if (vars.energy >= 70) energyDesc = "精神挺好的";
+    else if (vars.energy >= 40) energyDesc = "不算太累";
+    else if (vars.energy >= 20) energyDesc = "有一点疲惫感";
+    else energyDesc = "有点累了，想歇一歇";
 
     // 好感描述（自然语言）
     let affectionDesc = "";
@@ -85,17 +83,14 @@ export async function execute(args, ctx = {}) {
     // 综合状态描述
     let stateDesc = `${moodDesc}，${energyDesc}。`;
 
-    // 根据心情 + 好感的组合生成更细腻的体感（阈值引用 MOOD_THRESHOLDS，不手写数字）
-    // 心情好 = ≥65 档（档位数组第 2 个的 min），心情低 = <40 档（第 3 个的 min）
-    const moodHigh = vars.mood >= MOOD_THRESHOLDS[1].min;
-    const moodLow = vars.mood < MOOD_THRESHOLDS[2].min;
-    if (moodHigh && vars.affection >= 51) {
+    // 根据心情 + 好感的组合生成更细腻的体感
+    if (vars.mood >= 65 && vars.affection >= 51) {
       stateDesc += ` 今天见到${userName}，心里那种自在感是真的。`;
-    } else if (moodLow && vars.affection >= 51) {
+    } else if (vars.mood < 40 && vars.affection >= 51) {
       stateDesc += ` 虽然没什么精神，但有${userName}在旁边的话还不算太糟。`;
-    } else if (moodHigh && vars.affection < 30) {
+    } else if (vars.mood >= 65 && vars.affection < 30) {
       stateDesc += ` 今天心情还行，跟${userName}的关系还早，不着急。`;
-    } else if (moodLow && vars.affection < 30) {
+    } else if (vars.mood < 40 && vars.affection < 30) {
       stateDesc += ` 今天不太想说话，${userName}最好也别靠太近。`;
     }
 
