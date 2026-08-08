@@ -439,9 +439,8 @@
     render();
   };
 
-  // ─── 内联点击：发出去 + 自动收起展开区 ───
+  // ─── 内联点击：发出去（保持展开区，方便连续送礼/互动）───
   window._tbInlineAction = async function(type, itemId, itemName, icon) {
-    state.expandedPanel = null;
     await window._tbQuickAction(type, itemId, itemName, icon);
   };
 

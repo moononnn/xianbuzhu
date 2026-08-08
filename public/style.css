@@ -1110,7 +1110,7 @@ button:disabled,
 }
 
 .pp-action.primary.expanded {
-  background: var(--mint-soft);
+  background: #d9e9d5;
   color: var(--mint-deep);
 }
 
@@ -1129,6 +1129,8 @@ button:disabled,
 }
 
 .pp-inline-panel {
+  min-width: 0;
+  min-height: 290px;
   margin: 0 0 18px;
   padding: 4px 0 18px;
   border-bottom: 1px solid var(--line);
