@@ -3,8 +3,10 @@
 ## JavaScript 回归测试
 
 ```powershell
-node --test --test-concurrency=1 tests\*.test.js
+node --test tests/*.test.js
 ```
+
+（与 CI 完全一致：并发跑。遇到并发下偶发失败时，优先排查测试间的共享状态，不要改成串行掩盖。）
 
 覆盖：互动/送礼/恶作剧业务、并发写入、数据备份恢复、变量迁移与每日重置、伙伴刷新、会话选择（跨助手、长会话、真实毫秒时间戳）、风铃代理强制重判目标。
 
