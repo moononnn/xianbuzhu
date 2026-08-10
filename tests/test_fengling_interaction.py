@@ -231,6 +231,7 @@ class FenglingInteractionTests(unittest.TestCase):
         self.ball._play_chime(50.0)
         self.assertEqual(second_idle.play.call_count, 1)
 
+    @unittest.skipIf(sys.platform != "win32", "winsound 回退仅 Windows 平台")
     def test_winsound_fallback_still_uses_async_file_playback(self):
         self.ball.sound_volume = 0.65
         self.ball._sound_voices = []
