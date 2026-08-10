@@ -177,3 +177,38 @@ test("performVisit: 并发送礼不丢记录（写锁串行化）", async () => 
   assert.equal(saved.pendingVisits.length, 3, "三次并发送礼三条记录");
   assert.equal(saved.jar, 100 - 3 * 25 + 3 * 3, "光粒按三次扣减");
 });
+
+// ── 助手 ID 白名单（回归：/api/visit 曾只查类型和长度，不做 isValidAgentId） ──
+test("performVisit: 路径穿越 to 被拒（../etc/passwd）", async () => {
+  writeData();
+  const r = await performVisit(
+    { type: "gift", itemId: "coffee", to: "../etc/passwd" },
+    { bus: makeBus() },
+  );
+  assert.equal(r.status, 400);
+  assert.match(r.body.error, /无效的助手 ID/);
+  const saved = readData();
+  assert.equal(saved.pendingVisits.length, 0, "不应产生任何记录");
+});
+
+test("performVisit: 原型污染 to 被拒（__proto__）", async () => {
+  writeData();
+  const r = await performVisit(
+    { type: "gift", itemId: "coffee", to: "__proto__" },
+    { bus: makeBus() },
+  );
+  assert.equal(r.status, 400);
+  assert.match(r.body.error, /无效的助手 ID/);
+});
+
+test("performVisit: 未登记的助手 ID 被拒（partnerConfig 白名单）", async () => {
+  writeData();
+  const r = await performVisit(
+    { type: "gift", itemId: "coffee", to: "nobody" },
+    { bus: makeBus() },
+  );
+  assert.equal(r.status, 400);
+  assert.match(r.body.error, /助手不存在/);
+  const saved = readData();
+  assert.equal(saved.pendingVisits.length, 0, "不应产生任何记录");
+});

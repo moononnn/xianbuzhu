@@ -1,5 +1,26 @@
 # 闲不住 更新日志
 
+## v3.0.1 — 数据层安全修复 + 推送链路修复（正式版）
+
+### 🔧 修复
+
+- 充电推送丢失 bus 参数：pushToAgent 无 bus 必返回 false，助手收不到充电通知；补传 ctx.bus || ctx._bus，充电后助手能正常收到「充了电」通知
+- /api/visit 输入边界：performVisit 入口补助手 ID 白名单（isValidAgentId）+ partnerConfig 登记检查，路径穿越/原型污染/未登记 ID 一律拒绝；校验函数抽到 lib/validate.js 供 routes 与 actions 共用一套规则
+- recharge/update-narrative/llm-supplement-key 三个写接口补同一套白名单（此前装饰类接口查了、这几个漏了）
+- 统一数据写锁：锁从 actions.js 下沉到 data.js，全部写接口（领光粒/充电/装饰/配置/排序/隐藏/刷新）纳入同一把锁，消除旧快照跨异步覆盖竞态；恶作剧路径在 LLM 等待后基于最新快照合并写盘，不再覆盖期间的锁外写入
+- saveData 写盘失败不再静默：返回布尔值，API 层检查后回 500，不再谎报 success: true（含 performVisit 内部三处）
+- 事件队列 30s 超时真取消：AbortController 穿透到 LLM 请求，超时后内部任务不再后台跑；超时定时器补 clearTimeout
+- 恶作剧锁内 LLM 调用限时 10s，避免数据写锁被长时间占用
+- Python 探测跨平台：existsSync 查不了 PATH 命令，改为 spawnSync --version 真实探测，Linux 只有 python3 时不再误选不存在的 python
+- CI 升级：Node 20 升 24（Node 20 test runner 并发反序列化 bug 致 CI 红），测试命令统一 glob，风铃 Python 回归（PyQt6/xvfb）纳入 CI 自动守门
+- 测试夹具命名清理：测试数据中的示例助手 id 替换为中性 helperA/B/C（命名红线）
+- README 隐私补充：互动回应/小纸条生成会读助手 memory.md 前 1500 字随请求发送至 LLM 服务商
+
+### 🧪 测试
+
+- 新增回归：助手 ID 白名单（路径穿越/原型污染/未登记拒绝）、callLLM 外部 signal 穿透（abort 立即终止 fetch）、写盘失败回 500、充电推送携带 bus 到达 session:send
+- JavaScript 66 项 + 风铃 Python 58 项全部通过
+
 ## v3.0.0 — 风铃（悬浮球）（正式版）
 
 ### 🎐 风铃悬浮球

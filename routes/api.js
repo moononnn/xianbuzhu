@@ -42,6 +42,7 @@ import {
   scanWorkStats,
 } from "../lib/activity.js";
 import { withDataLock, pushToAgent, sendBarrage, performVisit } from "../lib/actions.js";
+import { isValidAgentId } from "../lib/validate.js";
 import {
   startFengling,
   stopFengling,
@@ -76,13 +77,8 @@ function json(data, status = 200) {
 
 // ════════════════════════════════════════
 //  助手 ID 白名单（防路径穿越 / 原型污染）
+//  定义已抽到 lib/validate.js，与 performVisit 共用同一套校验，避免两套规则分家
 // ════════════════════════════════════════
-const _RESERVED_IDS = new Set(['constructor', 'prototype', '__proto__']);
-export function isValidAgentId(id) {
-  if (typeof id !== 'string' || id.length === 0 || id.length > 64) return false;
-  if (_RESERVED_IDS.has(id)) return false;
-  return /^[a-zA-Z][a-zA-Z0-9_-]*$/.test(id);
-}
 
 // ─── 渲染页面 ───
 function renderPage(token, pluginBase) {
@@ -464,28 +460,32 @@ export default async function register(app, ctx = {}) {
   //  POST /api/claim — 领取光粒
   // ════════════════════════════════════════
   app.post("/api/claim", async (c) => {
-    const data = loadData();
-    const today = getToday(data);
+    return withDataLock(async () => {
+      const data = loadData();
+      const today = getToday(data);
 
-    let totalEffort = 0;
-    for (const p of Object.values(today.partners))
-      totalEffort += p.effortLP || 0;
-    today.totalLP = today.baseLP + totalEffort;
+      let totalEffort = 0;
+      for (const p of Object.values(today.partners))
+        totalEffort += p.effortLP || 0;
+      today.totalLP = today.baseLP + totalEffort;
 
-    const claimed = today.claimed || 0;
-    const toClaim = today.totalLP - claimed;
-    if (toClaim <= 0)
-      return json({
-        success: true,
-        jar: data.jar,
-        claimed: 0,
-        message: "今天没有新光粒可以收 ✨",
-      });
+      const claimed = today.claimed || 0;
+      const toClaim = today.totalLP - claimed;
+      if (toClaim <= 0)
+        return json({
+          success: true,
+          jar: data.jar,
+          claimed: 0,
+          message: "今天没有新光粒可以收 ✨",
+        });
 
-    today.claimed = claimed + toClaim;
-    data.jar += toClaim;
-    saveData(data);
-    return json({ success: true, jar: data.jar, claimed: toClaim });
+      today.claimed = claimed + toClaim;
+      data.jar += toClaim;
+      if (!saveData(data)) {
+        return json({ success: false, error: "数据保存失败，请重试" }, 500);
+      }
+      return json({ success: true, jar: data.jar, claimed: toClaim });
+    });
   });
 
   // ════════════════════════════════════════
@@ -528,71 +528,79 @@ export default async function register(app, ctx = {}) {
   //  POST /api/recharge — 充电（消耗 50 光粒，体力回满）
   // ════════════════════════════════════════
   app.post("/api/recharge", async (c) => {
-    const input = await readBody(c);
-    const data = loadData();
-    const { to } = input;
+    return withDataLock(async () => {
+      const input = await readBody(c);
+      const data = loadData();
+      const { to } = input;
 
-    if (!to) return json({ success: false, error: "缺少助手 ID" }, 400);
+      if (!to) return json({ success: false, error: "缺少助手 ID" }, 400);
+      if (!isValidAgentId(to)) {
+        return json({ success: false, error: "无效的助手 ID" }, 400);
+      }
 
-    // 检查今天是否已充过
-    if (isRechargedToday(data, to)) {
-      return json(
-        { success: false, error: "今天已经充过啦 ⚡", alreadyRecharged: true },
-        400,
-      );
-    }
+      // 检查今天是否已充过
+      if (isRechargedToday(data, to)) {
+        return json(
+          { success: false, error: "今天已经充过啦 ⚡", alreadyRecharged: true },
+          400,
+        );
+      }
 
-    // 检查光粒
-    const RECHARGE_COST = 50;
-    if ((data.jar || 0) < RECHARGE_COST) {
-      return json({ success: false, error: "光粒不够了 ✨" }, 400);
-    }
+      // 检查光粒
+      const RECHARGE_COST = 50;
+      if ((data.jar || 0) < RECHARGE_COST) {
+        return json({ success: false, error: "光粒不够了 ✨" }, 400);
+      }
 
-    // 检查助手是否存在
-    const partnerCfg = data.partnerConfig?.[to];
-    if (!partnerCfg) return json({ success: false, error: "助手不存在" }, 400);
+      // 检查助手是否存在
+      const partnerCfg = data.partnerConfig?.[to];
+      if (!partnerCfg) return json({ success: false, error: "助手不存在" }, 400);
 
-    // 扣光粒
-    data.jar -= RECHARGE_COST;
+      // 扣光粒
+      data.jar -= RECHARGE_COST;
 
-    // 体力拉满
-    partnerCfg.variables.energy = 100;
+      // 体力拉满
+      partnerCfg.variables.energy = 100;
 
-    // 标记今天已充
-    markRechargedToday(data, to);
+      // 标记今天已充
+      markRechargedToday(data, to);
 
-    // 记录事件（供次日心情推演）
-    recordEvent(data, to, {
-      type: "recharge",
-      itemId: "recharge",
-      itemName: "充电",
-      price: 0,
-    });
+      // 记录事件（供次日心情推演）
+      recordEvent(data, to, {
+        type: "recharge",
+        itemId: "recharge",
+        itemName: "充电",
+        price: 0,
+      });
 
-    // 生成充电提示
-    const tip = getRechargeTip();
+      // 生成充电提示
+      const tip = getRechargeTip();
 
-    saveData(data);
+      if (!saveData(data)) {
+        return json({ success: false, error: "数据保存失败，请重试" }, 500);
+      }
 
-    // 推送统一充电通知到助手对话框
-    const _chargeVariants = [
-      `⚡ 收到来自${getUserDisplayName()}的充电～`,
-      `⚡ ${getUserDisplayName()}给你充了电！`,
-    ];
-    pushToAgent(
-      to,
-      _chargeVariants[Math.floor(Math.random() * _chargeVariants.length)],
-    ).catch((err) => {
-      console.error("[闲不住] 充电推送失败:", err?.message || err);
-    });
+      // 推送统一充电通知到助手对话框
+      const _chargeVariants = [
+        `⚡ 收到来自${getUserDisplayName()}的充电～`,
+        `⚡ ${getUserDisplayName()}给你充了电！`,
+      ];
+      pushToAgent(
+        to,
+        _chargeVariants[Math.floor(Math.random() * _chargeVariants.length)],
+        ctx.bus || ctx._bus,
+      ).catch((err) => {
+        console.error("[闲不住] 充电推送失败:", err?.message || err);
+      });
 
-    sendBarrage(to, "recharge", "recharge", "充电", "");
+      sendBarrage(to, "recharge", "recharge", "充电", "");
 
-    return json({
-      success: true,
-      jar: data.jar,
-      energy: 100,
-      tip,
+      return json({
+        success: true,
+        jar: data.jar,
+        energy: 100,
+        tip,
+      });
     });
   });
 
@@ -607,28 +615,35 @@ export default async function register(app, ctx = {}) {
   //  POST /api/update-narrative — 更新状态
   // ════════════════════════════════════════
   app.post("/api/update-narrative", async (c) => {
-    const input = await readBody(c);
-    const data = loadData();
-    const today = getToday(data);
-    const pid = input.partner || "hanako";
+    return withDataLock(async () => {
+      const input = await readBody(c);
+      const data = loadData();
+      const today = getToday(data);
+      const pid = input.partner || "hanako";
 
-    // 输入校验
-    if (typeof pid !== "string" || pid.length > 100) {
-      return json({ success: false, error: "参数错误" }, 400);
-    }
-    const narrative =
-      typeof input.narrative === "string" ? input.narrative.slice(0, 200) : "";
+      // 输入校验
+      if (typeof pid !== "string" || pid.length > 100) {
+        return json({ success: false, error: "参数错误" }, 400);
+      }
+      if (!isValidAgentId(pid)) {
+        return json({ success: false, error: "无效的助手 ID" }, 400);
+      }
+      const narrative =
+        typeof input.narrative === "string" ? input.narrative.slice(0, 200) : "";
 
-    if (!today.partners[pid]) {
-      today.partners[pid] = { contributed: false, narrative: "", effortLP: 0 };
-    }
-    today.partners[pid].narrative = narrative;
-    today.partners[pid].contributed = true;
-    saveData(data);
-    return json({
-      success: true,
-      partner: pid,
-      narrative: today.partners[pid].narrative,
+      if (!today.partners[pid]) {
+        today.partners[pid] = { contributed: false, narrative: "", effortLP: 0 };
+      }
+      today.partners[pid].narrative = narrative;
+      today.partners[pid].contributed = true;
+      if (!saveData(data)) {
+        return json({ success: false, error: "数据保存失败，请重试" }, 500);
+      }
+      return json({
+        success: true,
+        partner: pid,
+        narrative: today.partners[pid].narrative,
+      });
     });
   });
 
@@ -680,45 +695,53 @@ export default async function register(app, ctx = {}) {
       if (!input.providerId || !input.apiKey) {
         return json({ success: false, error: "请填写 API Key" }, 400);
       }
-
-      const data = loadData();
-      if (!data.supplementKeys) data.supplementKeys = {};
-
-      // 从 models.json 读取该供应商的 baseUrl 和 api
-      let catalog;
-      try {
-        catalog = JSON.parse(
-          fs.readFileSync(path.join(HANA_HOME, "models.json"), "utf-8"),
-        );
-      } catch (e2) {
-        return json(
-          { success: false, error: "models.json 读取失败: " + e2.message },
-          500,
-        );
-      }
-      const provider = catalog.providers?.[input.providerId];
-      if (!provider) {
-        return json({ success: false, error: "供应商信息不存在" }, 400);
+      // 供应商 ID 白名单（providerId 会作为 supplementKeys 的对象 key，防原型污染）
+      if (!isValidAgentId(input.providerId)) {
+        return json({ success: false, error: "无效的供应商 ID" }, 400);
       }
 
-      data.supplementKeys[input.providerId] = {
-        apiKey: encryptKey(input.apiKey),
-        baseUrl: provider.baseUrl,
-        api: provider.api,
-        updatedAt: nowISO(),
-      };
+      return withDataLock(async () => {
+        const data = loadData();
+        if (!data.supplementKeys) data.supplementKeys = {};
 
-      // 同时也设为当前使用的模型
-      if (input.modelId) {
-        data.llmConfig = {
-          providerId: input.providerId,
-          modelId: input.modelId,
+        // 从 models.json 读取该供应商的 baseUrl 和 api
+        let catalog;
+        try {
+          catalog = JSON.parse(
+            fs.readFileSync(path.join(HANA_HOME, "models.json"), "utf-8"),
+          );
+        } catch (e2) {
+          return json(
+            { success: false, error: "models.json 读取失败: " + e2.message },
+            500,
+          );
+        }
+        const provider = catalog.providers?.[input.providerId];
+        if (!provider) {
+          return json({ success: false, error: "供应商信息不存在" }, 400);
+        }
+
+        data.supplementKeys[input.providerId] = {
+          apiKey: encryptKey(input.apiKey),
+          baseUrl: provider.baseUrl,
+          api: provider.api,
           updatedAt: nowISO(),
         };
-      }
 
-      saveData(data);
-      return json({ success: true });
+        // 同时也设为当前使用的模型
+        if (input.modelId) {
+          data.llmConfig = {
+            providerId: input.providerId,
+            modelId: input.modelId,
+            updatedAt: nowISO(),
+          };
+        }
+
+        if (!saveData(data)) {
+          return json({ success: false, error: "数据保存失败，请重试" }, 500);
+        }
+        return json({ success: true });
+      });
     } catch (e) {
       return json({ success: false, error: e?.message || "保存失败" }, 500);
     }
@@ -756,23 +779,27 @@ export default async function register(app, ctx = {}) {
         return json({ success: false, error: "API Key 格式错误" }, 400);
       }
 
-      const data = loadData();
-      data.llmCustom = {
-        baseUrl: input.baseUrl,
-        apiKey: encryptKey(input.apiKey),
-        api: input.api || "openai-completions",
-        modelId: input.modelId,
-        label: input.label || "自定义",
-        updatedAt: nowISO(),
-      };
-      // 同时也更新 llmConfig，指向自定义
-      data.llmConfig = {
-        providerId: "__custom__",
-        modelId: input.modelId,
-        updatedAt: nowISO(),
-      };
-      saveData(data);
-      return json({ success: true });
+      return withDataLock(async () => {
+        const data = loadData();
+        data.llmCustom = {
+          baseUrl: input.baseUrl,
+          apiKey: encryptKey(input.apiKey),
+          api: input.api || "openai-completions",
+          modelId: input.modelId,
+          label: input.label || "自定义",
+          updatedAt: nowISO(),
+        };
+        // 同时也更新 llmConfig，指向自定义
+        data.llmConfig = {
+          providerId: "__custom__",
+          modelId: input.modelId,
+          updatedAt: nowISO(),
+        };
+        if (!saveData(data)) {
+          return json({ success: false, error: "数据保存失败，请重试" }, 500);
+        }
+        return json({ success: true });
+      });
     } catch (e) {
       return json({ success: false, error: e?.message || "保存失败" }, 500);
     }
@@ -840,10 +867,14 @@ export default async function register(app, ctx = {}) {
   //  POST /api/notes/read — 标记小纸条已读
   // ════════════════════════════════════════
   app.post("/api/notes/read", (c) => {
-    const data = loadData();
-    data.lastReadNotesTs = Date.now();
-    saveData(data);
-    return json({ success: true });
+    return withDataLock(async () => {
+      const data = loadData();
+      data.lastReadNotesTs = Date.now();
+      if (!saveData(data)) {
+        return json({ success: false, error: "数据保存失败，请重试" }, 500);
+      }
+      return json({ success: true });
+    });
   });
 
   // ════════════════════════════════════════
@@ -854,7 +885,13 @@ export default async function register(app, ctx = {}) {
     if (!input.providerId || !input.modelId) {
       return json({ success: false, error: "请选择供应商和模型" }, 400);
     }
-    saveLLMConfig({ providerId: input.providerId, modelId: input.modelId });
+    const saved = await saveLLMConfig({
+      providerId: input.providerId,
+      modelId: input.modelId,
+    });
+    if (!saved) {
+      return json({ success: false, error: "数据保存失败，请重试" }, 500);
+    }
     return json({ success: true });
   });
 
@@ -964,133 +1001,145 @@ export default async function register(app, ctx = {}) {
   //  POST /api/buy-decoration — 购买装饰
   // ════════════════════════════════════════
   app.post("/api/buy-decoration", async (c) => {
-    const input = await readBody(c);
-    const data = loadData();
-    const { decorationId, target, text } = input;
+    return withDataLock(async () => {
+      const input = await readBody(c);
+      const data = loadData();
+      const { decorationId, target, text } = input;
 
-    if (!decorationId || !target) {
-      return json({ success: false, error: "缺少参数" }, 400);
-    }
-    if (!isValidAgentId(target)) {
-      return json({ success: false, error: "无效的助手 ID" }, 400);
-    }
-
-    const item = (data.decorationItems || []).find(
-      (i) => i.id === decorationId,
-    );
-    if (!item) return json({ success: false, error: "装饰不存在" }, 400);
-
-    if ((data.jar || 0) < item.price) {
-      return json({ success: false, error: "光粒不够了 ✨" }, 400);
-    }
-
-    const partnerCfg = data.partnerConfig?.[target];
-    if (!partnerCfg) return json({ success: false, error: "助手不存在" }, 400);
-
-    // 初始化新格式装饰数据
-    if (!partnerCfg.decorations || !partnerCfg.decorations.owned) {
-      partnerCfg.decorations = {
-        owned: { avatarFrame: [], cardBg: [], title: [] },
-        equipped: { avatarFrame: null, cardBg: null, title: null },
-      };
-    }
-    const deco = partnerCfg.decorations;
-
-    if (item.type === "title") {
-      // 称号：需要输入文字
-      if (!text) return json({ success: false, error: "请输入称号文字" }, 400);
-      if (typeof text !== "string" || text.length > 12)
-        return json({ success: false, error: "称号文字限 12 字以内" }, 400);
-      // 检查是否已拥有
-      if (deco.owned.title.includes(text)) {
-        return json({ success: false, error: "已拥有该称号" }, 400);
+      if (!decorationId || !target) {
+        return json({ success: false, error: "缺少参数" }, 400);
       }
-      deco.owned.title.push(text);
-      deco.equipped.title = text;
-    } else if (item.type === "titleEdit") {
-      // 改称号卡：必须先拥有至少一个称号
-      if (deco.owned.title.length === 0) {
-        return json({ success: false, error: "请先购买自定义称号" }, 400);
+      if (!isValidAgentId(target)) {
+        return json({ success: false, error: "无效的助手 ID" }, 400);
       }
-      if (!text)
-        return json({ success: false, error: "请输入新的称号文字" }, 400);
-      if (typeof text !== "string" || text.length > 12)
-        return json({ success: false, error: "称号文字限 12 字以内" }, 400);
-      if (deco.owned.title.includes(text)) {
-        return json({ success: false, error: "已拥有该称号" }, 400);
-      }
-      deco.owned.title.push(text);
-      deco.equipped.title = text;
-    } else {
-      // 头像框/卡面：检查是否已拥有
-      const typeKey = item.type; // 'avatarFrame' or 'cardBg'
-      if (deco.owned[typeKey] && deco.owned[typeKey].includes(item.id)) {
-        return json({ success: false, error: "已拥有该装饰" }, 400);
-      }
-      if (!deco.owned[typeKey]) deco.owned[typeKey] = [];
-      deco.owned[typeKey].push(item.id);
-      deco.equipped[typeKey] = item.id;
-    }
 
-    data.jar -= item.price;
-    saveData(data);
+      const item = (data.decorationItems || []).find(
+        (i) => i.id === decorationId,
+      );
+      if (!item) return json({ success: false, error: "装饰不存在" }, 400);
 
-    console.log(`[闲不住] 装饰购买成功: ${item.name} → ${target}`);
-    return json({ success: true, jar: data.jar, decorations: deco });
+      if ((data.jar || 0) < item.price) {
+        return json({ success: false, error: "光粒不够了 ✨" }, 400);
+      }
+
+      const partnerCfg = data.partnerConfig?.[target];
+      if (!partnerCfg) return json({ success: false, error: "助手不存在" }, 400);
+
+      // 初始化新格式装饰数据
+      if (!partnerCfg.decorations || !partnerCfg.decorations.owned) {
+        partnerCfg.decorations = {
+          owned: { avatarFrame: [], cardBg: [], title: [] },
+          equipped: { avatarFrame: null, cardBg: null, title: null },
+        };
+      }
+      const deco = partnerCfg.decorations;
+
+      if (item.type === "title") {
+        // 称号：需要输入文字
+        if (!text) return json({ success: false, error: "请输入称号文字" }, 400);
+        if (typeof text !== "string" || text.length > 12)
+          return json({ success: false, error: "称号文字限 12 字以内" }, 400);
+        // 检查是否已拥有
+        if (deco.owned.title.includes(text)) {
+          return json({ success: false, error: "已拥有该称号" }, 400);
+        }
+        deco.owned.title.push(text);
+        deco.equipped.title = text;
+      } else if (item.type === "titleEdit") {
+        // 改称号卡：必须先拥有至少一个称号
+        if (deco.owned.title.length === 0) {
+          return json({ success: false, error: "请先购买自定义称号" }, 400);
+        }
+        if (!text)
+          return json({ success: false, error: "请输入新的称号文字" }, 400);
+        if (typeof text !== "string" || text.length > 12)
+          return json({ success: false, error: "称号文字限 12 字以内" }, 400);
+        if (deco.owned.title.includes(text)) {
+          return json({ success: false, error: "已拥有该称号" }, 400);
+        }
+        deco.owned.title.push(text);
+        deco.equipped.title = text;
+      } else {
+        // 头像框/卡面：检查是否已拥有
+        const typeKey = item.type; // 'avatarFrame' or 'cardBg'
+        if (deco.owned[typeKey] && deco.owned[typeKey].includes(item.id)) {
+          return json({ success: false, error: "已拥有该装饰" }, 400);
+        }
+        if (!deco.owned[typeKey]) deco.owned[typeKey] = [];
+        deco.owned[typeKey].push(item.id);
+        deco.equipped[typeKey] = item.id;
+      }
+
+      data.jar -= item.price;
+      if (!saveData(data)) {
+        return json({ success: false, error: "数据保存失败，请重试" }, 500);
+      }
+
+      console.log(`[闲不住] 装饰购买成功: ${item.name} → ${target}`);
+      return json({ success: true, jar: data.jar, decorations: deco });
+    });
   });
 
   // ════════════════════════════════════════
   //  POST /api/equip-decoration — 切换装饰
   // ════════════════════════════════════════
   app.post("/api/equip-decoration", async (c) => {
-    const input = await readBody(c);
-    const data = loadData();
-    const { target, type, itemId } = input;
+    return withDataLock(async () => {
+      const input = await readBody(c);
+      const data = loadData();
+      const { target, type, itemId } = input;
 
-    if (!target || !type || !itemId) {
-      return json({ success: false, error: "缺少参数" }, 400);
-    }
-    if (!isValidAgentId(target)) {
-      return json({ success: false, error: "无效的助手 ID" }, 400);
-    }
+      if (!target || !type || !itemId) {
+        return json({ success: false, error: "缺少参数" }, 400);
+      }
+      if (!isValidAgentId(target)) {
+        return json({ success: false, error: "无效的助手 ID" }, 400);
+      }
 
-    const partnerCfg = data.partnerConfig?.[target];
-    if (!partnerCfg) return json({ success: false, error: "助手不存在" }, 400);
+      const partnerCfg = data.partnerConfig?.[target];
+      if (!partnerCfg) return json({ success: false, error: "助手不存在" }, 400);
 
-    const deco = partnerCfg.decorations;
-    if (!deco?.owned?.[type] || !deco.owned[type].includes(itemId)) {
-      return json({ success: false, error: "未拥有该装饰" }, 400);
-    }
+      const deco = partnerCfg.decorations;
+      if (!deco?.owned?.[type] || !deco.owned[type].includes(itemId)) {
+        return json({ success: false, error: "未拥有该装饰" }, 400);
+      }
 
-    deco.equipped[type] = itemId;
-    saveData(data);
-    return json({ success: true, decorations: deco });
+      deco.equipped[type] = itemId;
+      if (!saveData(data)) {
+        return json({ success: false, error: "数据保存失败，请重试" }, 500);
+      }
+      return json({ success: true, decorations: deco });
+    });
   });
 
   // ════════════════════════════════════════
   //  POST /api/unequip-decoration — 卸下装饰
   // ════════════════════════════════════════
   app.post("/api/unequip-decoration", async (c) => {
-    const input = await readBody(c);
-    const data = loadData();
-    const { target, type } = input;
+    return withDataLock(async () => {
+      const input = await readBody(c);
+      const data = loadData();
+      const { target, type } = input;
 
-    if (!target || !type) {
-      return json({ success: false, error: "缺少参数" }, 400);
-    }
-    if (!isValidAgentId(target)) {
-      return json({ success: false, error: "无效的助手 ID" }, 400);
-    }
+      if (!target || !type) {
+        return json({ success: false, error: "缺少参数" }, 400);
+      }
+      if (!isValidAgentId(target)) {
+        return json({ success: false, error: "无效的助手 ID" }, 400);
+      }
 
-    const partnerCfg = data.partnerConfig?.[target];
-    if (!partnerCfg) return json({ success: false, error: "助手不存在" }, 400);
+      const partnerCfg = data.partnerConfig?.[target];
+      if (!partnerCfg) return json({ success: false, error: "助手不存在" }, 400);
 
-    const deco = partnerCfg.decorations;
-    if (deco?.equipped) {
-      deco.equipped[type] = null;
-      saveData(data);
-    }
-    return json({ success: true, decorations: deco });
+      const deco = partnerCfg.decorations;
+      if (deco?.equipped) {
+        deco.equipped[type] = null;
+        if (!saveData(data)) {
+          return json({ success: false, error: "数据保存失败，请重试" }, 500);
+        }
+      }
+      return json({ success: true, decorations: deco });
+    });
   });
 
   // ════════════════════════════════════════
@@ -1121,50 +1170,62 @@ export default async function register(app, ctx = {}) {
   //  POST /api/partner-order — 保存伙伴排序
   // ════════════════════════════════════════
   app.post("/api/partner-order", async (c) => {
-    const input = await readBody(c);
-    const data = loadData();
-    if (!Array.isArray(input.order)) {
-      return json({ success: false, error: "order 必须是数组" }, 400);
-    }
-    data.partnerOrder = input.order;
-    saveData(data);
-    return json({ success: true });
+    return withDataLock(async () => {
+      const input = await readBody(c);
+      const data = loadData();
+      if (!Array.isArray(input.order)) {
+        return json({ success: false, error: "order 必须是数组" }, 400);
+      }
+      data.partnerOrder = input.order;
+      if (!saveData(data)) {
+        return json({ success: false, error: "数据保存失败，请重试" }, 500);
+      }
+      return json({ success: true });
+    });
   });
 
   // ════════════════════════════════════════
   //  POST /api/partner-hidden — 隐藏/显示伙伴（展板编辑）
   // ════════════════════════════════════════
   app.post("/api/partner-hidden", async (c) => {
-    const input = await readBody(c);
-    const data = loadData();
-    const { target, hidden } = input;
+    return withDataLock(async () => {
+      const input = await readBody(c);
+      const data = loadData();
+      const { target, hidden } = input;
 
-    if (!target) return json({ success: false, error: "缺少参数" }, 400);
-    if (!isValidAgentId(target))
-      return json({ success: false, error: "无效的助手 ID" }, 400);
-    const cfg = data.partnerConfig?.[target];
-    if (!cfg) return json({ success: false, error: "助手不存在" }, 400);
+      if (!target) return json({ success: false, error: "缺少参数" }, 400);
+      if (!isValidAgentId(target))
+        return json({ success: false, error: "无效的助手 ID" }, 400);
+      const cfg = data.partnerConfig?.[target];
+      if (!cfg) return json({ success: false, error: "助手不存在" }, 400);
 
-    cfg.hidden = !!hidden;
-    saveData(data);
-    console.log(
-      `[闲不住] 伙伴显示状态: ${target} → ${cfg.hidden ? "隐藏" : "显示"}`,
-    );
-    return json({ success: true });
+      cfg.hidden = !!hidden;
+      if (!saveData(data)) {
+        return json({ success: false, error: "数据保存失败，请重试" }, 500);
+      }
+      console.log(
+        `[闲不住] 伙伴显示状态: ${target} → ${cfg.hidden ? "隐藏" : "显示"}`,
+      );
+      return json({ success: true });
+    });
   });
 
   // ════════════════════════════════════════
   //  POST /api/refresh-partners — 刷新列表：重新扫描 agents，找回所有伙伴
   // ════════════════════════════════════════
   app.post("/api/refresh-partners", async (c) => {
-    const data = loadData();
-    const scanned = scanPartners();
-    data.partnerConfig = mergeRefreshedPartners(data.partnerConfig, scanned);
-    saveData(data);
-    console.log(
-      `[闲不住] 刷新伙伴列表，共 ${Object.keys(scanned).length} 个`,
-    );
-    return json({ success: true, count: Object.keys(scanned).length });
+    return withDataLock(async () => {
+      const data = loadData();
+      const scanned = scanPartners();
+      data.partnerConfig = mergeRefreshedPartners(data.partnerConfig, scanned);
+      if (!saveData(data)) {
+        return json({ success: false, error: "数据保存失败，请重试" }, 500);
+      }
+      console.log(
+        `[闲不住] 刷新伙伴列表，共 ${Object.keys(scanned).length} 个`,
+      );
+      return json({ success: true, count: Object.keys(scanned).length });
+    });
   });
 
 

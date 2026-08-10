@@ -127,7 +127,7 @@ test("sense-state: mood=65 进入不错档，energy=39 进入疲惫档", async (
 
 test("isValidAgentId: 正常助手 ID 通过", async () => {
   const { isValidAgentId } = await import(
-    "../routes/api.js?v=" + Date.now()
+    "../lib/validate.js?v=" + Date.now()
   );
   assert.equal(isValidAgentId("hanako"), true);
   assert.equal(isValidAgentId("helperA"), true);
@@ -136,7 +136,7 @@ test("isValidAgentId: 正常助手 ID 通过", async () => {
 
 test("isValidAgentId: 路径穿越/原型污染/脏输入被拒绝", async () => {
   const { isValidAgentId } = await import(
-    "../routes/api.js?v=" + Date.now()
+    "../lib/validate.js?v=" + Date.now()
   );
   assert.equal(isValidAgentId("../etc/passwd"), false);
   assert.equal(isValidAgentId(".."), false);
