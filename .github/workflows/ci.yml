@@ -14,8 +14,11 @@ jobs:
         with:
           node-version: 24
       - run: node --test tests/*.test.js
-      - name: 安装 PyQt6（风铃 Python 回归依赖）
-        run: sudo apt-get update && sudo apt-get install -y python3-pyqt6 xvfb
+      - name: 安装风铃 Python 依赖（PyQt6 + xvfb）
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb
+          pip3 install --break-system-packages PyQt6
       - name: Python 风铃回归（DSP/交互/布局）
         run: xvfb-run -a python3 -m unittest discover -s tests -p "test_fengling_*.py"
       - name: 命名红线检查
