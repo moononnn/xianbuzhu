@@ -67,6 +67,7 @@
     currentAgentId: null,       // Hana 主对话正在聊的 agent（自动同步）
     expandedPanel: null,        // 'interact' / 'gift' / null
     _initializedOnce: false,    // 首次加载默认展开互动的标志
+    fenglingRunning: false,     // 风铃悬浮球是否在跑
   };
   var currentAction = null;
 
@@ -131,6 +132,10 @@
     }
     html += '<button class="topbar-note-btn" onclick="window._tbOpenEditPartners()" title="编辑伙伴列表" aria-label="编辑伙伴列表">编辑</button>';
     html += '<button class="topbar-note-btn ' + (isLLMConfigured ? '' : 'topbar-warn') + '" onclick="window._tbToggleLLM()" title="模型设置" aria-label="打开模型设置">设置</button>';
+    html += '<button class="fengling-toggle-wrap' + (state.fenglingRunning ? ' on' : '') + '" id="fengling-toggle" onclick="window._tbToggleFengling()" title="风铃悬浮球：桌面小风铃，送礼/互动/恶作剧不用开页面" aria-label="风铃悬浮球开关" aria-pressed="' + (state.fenglingRunning ? 'true' : 'false') + '">';
+    html += '<span class="fengling-toggle-label">风铃（悬浮球）</span>';
+    html += '<span class="fengling-toggle-switch' + (state.fenglingRunning ? ' on' : '') + '"><span class="fengling-toggle-thumb"></span></span>';
+    html += '</button>';
     html += '<button class="' + claimClass + '" ' + (!hasNew ? 'disabled' : '') + ' onclick="window._tbClaim()">' + claimLabel + '</button>';
     html += '</div></div>';
 
@@ -850,6 +855,79 @@
     }
   };
 
+  // ─── 风铃悬浮球：打开页面自动启动（半自动：关过则本次不弹）───
+  window._tbFenglingAutoBoot = async function() {
+    if (state.fenglingRunning) return; // 已经在跑不重复启动
+    var st;
+    try {
+      // 消费式读取：dismissed 读一次即清除；Hana 重启内存重置
+      st = await api('/api/fengling/autoboot');
+    } catch { return; }
+    if (!st || !st.ok) return;
+    state.fenglingRunning = !!st.running;
+    if (st.running) return;
+    if (st.dismissed) return; // 上次手动关过：本次打开页面不弹
+    if (!st.pyQtOk) {
+      toast('风铃需要 Python + PyQt6，装一下：pip install PyQt6', 'error');
+      return;
+    }
+    showPersistentToast('正在启动风铃…');
+    try {
+      var start = await api('/api/fengling/start', { method: 'POST' });
+      if (start.ok) {
+        state.fenglingRunning = true;
+        updatePersistentToast('风铃已飘出 🎐');
+        setTimeout(clearPersistentToast, 1800);
+        render();
+      } else {
+        updatePersistentToast(start.error || '风铃启动失败', 'error');
+        setTimeout(clearPersistentToast, 3000);
+      }
+    } catch (e) {
+      updatePersistentToast('风铃启动失败', 'error');
+      setTimeout(clearPersistentToast, 3000);
+    }
+  };
+
+  // ─── 风铃悬浮球开关（没跑就启动，跑着就收起）───
+  window._tbToggleFengling = async function() {
+    try {
+      var st = await api('/api/fengling/status');
+      if (!st.ok) {
+        toast('风铃状态查询失败', 'error');
+        return;
+      }
+      if (st.running) {
+        var stop = await api('/api/fengling/stop', { method: 'POST' });
+        if (stop.ok) {
+          state.fenglingRunning = false;
+          toast('风铃收起啦');
+          render();
+        } else {
+          toast(stop.error || '停止失败', 'error');
+        }
+      } else {
+        if (st.pyQtOk) {
+          showPersistentToast('正在启动风铃…');
+          var start = await api('/api/fengling/start', { method: 'POST' });
+          if (start.ok) {
+            state.fenglingRunning = true;
+            updatePersistentToast('风铃已飘出 🎐');
+            setTimeout(clearPersistentToast, 1800);
+            render();
+          } else {
+            updatePersistentToast(start.error || '启动失败', 'error');
+            setTimeout(clearPersistentToast, 3000);
+          }
+        } else {
+          toast('风铃需要 Python + PyQt6，装一下：pip install PyQt6', 'error');
+        }
+      }
+    } catch (e) {
+      toast('操作失败：' + (e && e.message ? e.message : '网络异常'), 'error');
+    }
+  };
+
   // ─── 切换标签（老版本，保留兼容）──
   window._tbTab = function(tab) {
     state.currentTab = tab;
@@ -1405,6 +1483,9 @@
       }
 
       render();
+
+      // 风铃：打开页面自动启动（用户手动收起过则本次不再弹）
+      window._tbFenglingAutoBoot();
     } catch (e) {
       console.error('[闲不住] 加载失败:', e);
     }
@@ -1429,7 +1510,17 @@
         }
       }
     } catch {}
+
+    // 风铃：同步实际运行状态（右键关闭风铃后，按钮对勾自动消失）
+    try {
+      var fst = await api('/api/fengling/status');
+      if (fst && fst.ok && !!fst.running !== state.fenglingRunning) {
+        state.fenglingRunning = !!fst.running;
+        render();
+      }
+    } catch {}
   }, 5000);
+
 
   // ─── 启动 ───
   loadData();

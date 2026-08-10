@@ -306,13 +306,13 @@ function makeResetFixture() {
         totalLP: 508,
         partners: {
           hanako: { contributed: false, narrative: "", effortLP: 403 },
-          yuzuki: { contributed: false, narrative: "", effortLP: 0 },
+          helperC: { contributed: false, narrative: "", effortLP: 0 },
         },
       },
     },
     partnerConfig: {
       hanako: { name: "小花", variables: { energy: 100, mood: 60, affection: 96 } },
-      yuzuki: { name: "伙伴B", variables: { energy: 100, mood: 60, affection: 10 } },
+      helperC: { name: "伙伴B", variables: { energy: 100, mood: 60, affection: 10 } },
     },
   };
 }
@@ -322,19 +322,19 @@ test("performDailyReset: 通宵惩罚按个人光粒，干活多的扣、躺平�
   performDailyReset(data, "2026-08-05");
   // 昨天 hanako 403 光粒 → 403/30 = 13 → 精力 87（2026-08-07 调低系数后）
   assert.equal(data.partnerConfig.hanako.variables.energy, 87);
-  // 昨天 yuzuki 0 光粒 → 满血 100
-  assert.equal(data.partnerConfig.yuzuki.variables.energy, 100);
+  // 昨天 helperC 0 光粒 → 满血 100
+  assert.equal(data.partnerConfig.helperC.variables.energy, 100);
 });
 
 test("performDailyReset: 无昨日记录/无 effortLP 字段 = 不扣（兼容旧数据）", () => {
   const data = {
     days: {},
     partnerConfig: {
-      feiyue: { name: "伙伴A", variables: { energy: 100, mood: 60, affection: 38 } },
+      helperA: { name: "伙伴A", variables: { energy: 100, mood: 60, affection: 38 } },
     },
   };
   performDailyReset(data, "2026-08-05");
-  assert.equal(data.partnerConfig.feiyue.variables.energy, 100);
+  assert.equal(data.partnerConfig.helperA.variables.energy, 100);
 });
 
 test("performDailyReset: 光粒封顶 30 惩罚（超高光粒），精力不低于 30", () => {

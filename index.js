@@ -5,7 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { loadData, saveData } from "./lib/data.js";
+import { loadData, saveData, describeMood } from "./lib/data.js";
 import { scanPartners } from "./lib/config.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -116,6 +116,67 @@ class WorkVisitPlugin {
     }
 
     console.log("[闲不住] 推送模式已启用，所有互动/礼物/恶作剧走系统推送");
+
+    // ── 漂流瓶独立插件联动桥（只读、版本化；未安装漂流瓶则无人调用，无副作用） ──
+    this.registerBridgeHandlers();
+  }
+
+  // 给「漂流瓶」独立插件提供两个只读桥：
+  //   work-visit:status:v1    → 各助手模糊状态（心情/缘由，软影响用，不给数值）
+  //   work-visit:sea-export:v1 → 旧海瓶子列表（一次性迁移用，只读不删）
+  registerBridgeHandlers() {
+    const ctx = this.ctx;
+    if (!ctx?.bus?.handle) {
+      console.log("[闲不住] bus.handle 不可用，跳过漂流瓶桥注册");
+      return;
+    }
+    try {
+      this._bridgeUnregisters = this._bridgeUnregisters || [];
+      this._bridgeUnregisters.push(
+        ctx.bus.handle("work-visit:status:v1", () => {
+          try {
+            const data = loadData();
+            const partners = {};
+            for (const [id, cfg] of Object.entries(data.partnerConfig || {})) {
+              const vars = cfg?.variables || {};
+              partners[id] = {
+                moodText: describeMood(vars.mood),
+                moodReason: vars.moodReason || "",
+              };
+            }
+            return { ok: true, data: { partners } };
+          } catch (e) {
+            console.error("[闲不住] status 桥失败:", e?.message || e);
+            return { ok: false, error: "闲不住状态读取失败" };
+          }
+        }),
+      );
+      this._bridgeUnregisters.push(
+        ctx.bus.handle("work-visit:sea-export:v1", () => {
+          try {
+            const data = loadData();
+            return { ok: true, data: { bottles: data.bottles || [] } };
+          } catch (e) {
+            console.error("[闲不住] sea-export 桥失败:", e?.message || e);
+            return { ok: false, error: "旧海数据读取失败" };
+          }
+        }),
+      );
+      console.log("[闲不住] 漂流瓶联动桥已注册（status + sea-export）");
+    } catch (e) {
+      console.error("[闲不住] 注册漂流瓶桥失败:", e?.message || e);
+    }
+  }
+
+  async onunload() {
+    for (const un of this._bridgeUnregisters || []) {
+      try {
+        if (typeof un === "function") un();
+      } catch (e) {
+        console.error("[闲不住] 注销桥失败:", e?.message || e);
+      }
+    }
+    this._bridgeUnregisters = [];
   }
 }
 

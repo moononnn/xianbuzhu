@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400" width="400" height="400">
+  <defs>
+    <linearGradient id="bellGrad" x1="0.18" y1="0" x2="0.82" y2="1">
+      <stop offset="0" stop-color="#e5f7f0"/>
+      <stop offset="0.58" stop-color="#abdacf"/>
+      <stop offset="1" stop-color="#79bea9"/>
+    </linearGradient>
+  </defs>
+
+  <!-- 挂环与双股绳，直接垂下接到铃顶，无横梁 -->
+  <g id="hanger">
+    <circle cx="200" cy="37" r="5.5" fill="#fdf8ee" stroke="#568f7f" stroke-width="3.5"/>
+    <path d="M196 43 C190 57 209 67 202 77" fill="none" stroke="#568f7f" stroke-width="4" stroke-linecap="round"/>
+    <path d="M204 43 C210 57 191 67 198 77" fill="none" stroke="#3f7567" stroke-width="4" stroke-linecap="round"/>
+    <path d="M200 79 C194 88 207 95 201 102" fill="none" stroke="#568f7f" stroke-width="3.6" stroke-linecap="round"/>
+  </g>
+
+  <!-- 单只薄荷瓷铃（原中央铃，完整保留） -->
+  <path class="bell-body" d="M200 102 C178 103 164 116 162 136 L159 171 Q158 184 171 184 L229 184 Q242 184 241 171 L238 136 C236 116 222 103 200 102 Z" fill="url(#bellGrad)" stroke="#66aa96" stroke-width="2.5" stroke-linejoin="round"/>
+  <path d="M181 119 C175 133 177 151 184 165" fill="none" stroke="#f7fff9" stroke-width="4.5" stroke-linecap="round" opacity="0.62"/>
+  <path d="M173 184 Q200 189 227 184" fill="none" stroke="#438b77" stroke-width="3" stroke-linecap="round"/>
+
+  <!-- 樱花彩绘（原中央铃，完整保留） -->
+  <g id="deco" transform="translate(207 140)">
+    <ellipse cx="0" cy="-6" rx="4" ry="5.5" fill="#f4a9bc"/>
+    <ellipse cx="5.7" cy="-1.8" rx="4" ry="5.5" fill="#f4a9bc" transform="rotate(72 5.7 -1.8)"/>
+    <ellipse cx="3.5" cy="5" rx="4" ry="5.5" fill="#f4a9bc" transform="rotate(144 3.5 5)"/>
+    <ellipse cx="-3.5" cy="5" rx="4" ry="5.5" fill="#f4a9bc" transform="rotate(-144 -3.5 5)"/>
+    <ellipse cx="-5.7" cy="-1.8" rx="4" ry="5.5" fill="#f4a9bc" transform="rotate(-72 -5.7 -1.8)"/>
+    <circle cx="0" cy="0" r="3.2" fill="#fff4cf"/>
+  </g>
+</svg>

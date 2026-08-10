@@ -348,6 +348,66 @@ button:disabled,
   transform: none;
 }
 
+/* ─── 风铃悬浮球开关（文字 + 滑块） ─── */
+.fengling-toggle-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 40px;
+  padding: 0 12px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--ink-2);
+  font-size: var(--text-xs);
+  cursor: pointer;
+  transition:
+    border-color var(--dur-fast) ease,
+    background-color var(--dur-fast) ease,
+    color var(--dur-fast) ease;
+}
+
+.fengling-toggle-wrap:hover {
+  border-color: color-mix(in srgb, var(--mint-deep) 36%, transparent);
+  background: var(--mint-soft);
+  color: var(--mint-deep);
+}
+
+.fengling-toggle-label {
+  white-space: nowrap;
+}
+
+.fengling-toggle-switch {
+  position: relative;
+  flex: 0 0 auto;
+  width: 34px;
+  height: 20px;
+  border-radius: 999px;
+  background: var(--line-strong);
+  transition: background-color var(--dur-fast) ease;
+}
+
+.fengling-toggle-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
+  transition: transform var(--dur-fast) ease;
+}
+
+.fengling-toggle-switch.on {
+  background: var(--mint);
+}
+
+.fengling-toggle-switch.on .fengling-toggle-thumb {
+  transform: translateX(14px);
+}
+
 /* ───────────────────────────── 小纸条通知 ───────────────────────────── */
 
 .note-guide {
@@ -2399,3 +2459,4 @@ button:disabled,
 .frame-pinwheel .af-2,
 .frame-pinwheel .af-3 { display: none; }
 .frame-pinwheel .af-glow { background-image: radial-gradient(circle, transparent 55%, rgba(210, 180, 120, 0.26) 72%, transparent 84%); }
+

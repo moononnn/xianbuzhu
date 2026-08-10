@@ -130,7 +130,7 @@ test("isValidAgentId: 正常助手 ID 通过", async () => {
     "../routes/api.js?v=" + Date.now()
   );
   assert.equal(isValidAgentId("hanako"), true);
-  assert.equal(isValidAgentId("feiyue"), true);
+  assert.equal(isValidAgentId("helperA"), true);
   assert.equal(isValidAgentId("a-b_c1"), true);
 });
 

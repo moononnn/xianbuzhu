@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400" width="400" height="400">
+  <g id="tanzaku" transform="translate(200 258)">
+    <!-- 纸片只绕自己的顶部轻转；柔线、结点和铃舌由程序实时绘制 -->
+    <path d="M-12 -6 Q0 -10 12 -6 L11 49 L6 58 L0 52 L-6 58 L-11 49 Z" fill="#f3afbf" stroke="#d9869c" stroke-width="1.6" stroke-linejoin="round"/>
+  </g>
+</svg>

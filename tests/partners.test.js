@@ -7,15 +7,15 @@ import { mergeRefreshedPartners } from "../lib/config.js";
 test("mergeRefreshedPartners: 刷新找回所有伙伴（清除 hidden）", () => {
   const old = {
     hanako: { name: "小花", color: "#4CAF50", hidden: true, variables: { mood: 60 } },
-    feiyue: { name: "伙伴A", color: "#E91E63", hidden: true, variables: { mood: 40 } },
+    helperA: { name: "伙伴A", color: "#E91E63", hidden: true, variables: { mood: 40 } },
   };
   const scanned = {
     hanako: { name: "小花", color: "#111111", variables: { mood: 99 } },
-    feiyue: { name: "伙伴A", color: "#222222", variables: { mood: 88 } },
+    helperA: { name: "伙伴A", color: "#222222", variables: { mood: 88 } },
   };
   const out = mergeRefreshedPartners(old, scanned);
   assert.equal(out.hanako.hidden, undefined, "刷新后 hidden 应被清除");
-  assert.equal(out.feiyue.hidden, undefined, "刷新后 hidden 应被清除");
+  assert.equal(out.helperA.hidden, undefined, "刷新后 hidden 应被清除");
 });
 
 test("mergeRefreshedPartners: 保留旧配置的颜色/变量/装饰", () => {

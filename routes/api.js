@@ -18,6 +18,7 @@ import {
   nowISO,
   randomTip,
   findLatestSessionPath,
+  findMostActiveAgentId,
   getRechargeTip,
   isRechargedToday,
   markRechargedToday,
@@ -40,64 +41,19 @@ import {
   getUserDisplayName,
   scanWorkStats,
 } from "../lib/activity.js";
+import { withDataLock, pushToAgent, sendBarrage, performVisit } from "../lib/actions.js";
+import {
+  startFengling,
+  stopFengling,
+  getFenglingState,
+  checkFenglingDeps,
+  consumeFenglingDismissed,
+} from "../lib/fengling.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, "..", "public");
 const HANA_HOME = process.env.HANA_HOME || path.join(os.homedir(), ".hanako");
 
-// ─── 数据写锁：load-modify-save 串行化，防止并发请求互相覆盖丢更新 ───
-let _dataLock = Promise.resolve();
-function withDataLock(fn) {
-  const run = _dataLock.then(fn);
-  _dataLock = run.catch(() => {});
-  return run;
-}
-
-// ─── 通过 session-manifest.db 将最新会话文件解析为 sess_xxx ID ───
-async function findLatestSessionId(agentId) {
-  try {
-    const latestPath = findLatestSessionPath(agentId);
-    if (!latestPath) return "";
-
-    // 方案1：从最新会话文件内容里提取 sess id（零依赖，不依赖 sqlite3 CLI）
-    try {
-      const content = fs.readFileSync(latestPath, "utf-8");
-      const m = content.match(/sess_[a-z0-9]+_[a-f0-9]+/);
-      if (m) return m[0];
-    } catch (e) {
-      console.error("[闲不住] 读取最新会话失败:", e?.message || e);
-    }
-
-    // 方案2：从 session-titles.json 取最新的 sess_xxx（兜底）
-    const titlesPath = path.join(
-      HANA_HOME,
-      "agents",
-      agentId,
-      "sessions",
-      "session-titles.json",
-    );
-    if (fs.existsSync(titlesPath)) {
-      try {
-        const raw = fs.readFileSync(titlesPath, "utf-8");
-        const titles = JSON.parse(raw);
-        let latestSess = "";
-        for (const key of Object.keys(titles)) {
-          if (key.startsWith("sess_") && key > latestSess) {
-            latestSess = key;
-          }
-        }
-        if (latestSess) return latestSess;
-      } catch (e) {
-        console.error("[闲不住] session-titles 解析失败:", e?.message || e);
-      }
-    }
-
-    return "";
-  } catch (e) {
-    console.error("[闲不住] 解析 sess_xxx ID 失败:", e?.message || e);
-    return "";
-  }
-}
 
 // ─── 辅助 ───
 async function readBody(c) {
@@ -537,471 +493,35 @@ export default async function register(app, ctx = {}) {
   //  不再依赖 pendingVisits + check-visits，直接推送到助手对话框
   // ════════════════════════════════════════
 
-  // ─── 推送消息到目标助手的对话框（失败重试：助手流式输出时 session:send 会抛 session_busy） ───
-  async function pushToAgent(agentId, text) {
-    const bus = ctx.bus || ctx._bus;
-    if (!bus) {
-      console.warn("[闲不住] 推送失败: bus 不可用");
-      return false;
-    }
-    const sessionId = await findLatestSessionId(agentId);
-    if (!sessionId) {
-      console.warn(`[闲不住] 推送失败: 未找到 ${agentId} 的会话 ID`);
-      return false;
-    }
-
-    // 会话忙（流式输出中）时等待重试：2s / 5s / 10s，最多 3 次；非忙碌错误不重试
-    const delays = [2000, 5000, 10000];
-    for (let attempt = 0; ; attempt++) {
-      try {
-        await bus.request("session:send", { text, sessionId });
-        console.log(
-          `[闲不住] 推送成功 → ${agentId} 会话 ${sessionId.slice(0, 20)}...`,
-        );
-        return true;
-      } catch (e) {
-        const msg = e?.message || String(e);
-        const busy = /busy/i.test(msg);
-        if (!busy || attempt >= delays.length) {
-          console.error(
-            `[闲不住] 推送失败${busy ? `（会话忙，重试 ${delays.length} 次后仍失败）` : "（非忙碌错误）"}:`,
-            msg,
-          );
-          return false;
-        }
-        const delay = delays[attempt];
-        console.log(
-          `[闲不住] 会话忙，${delay / 1000}s 后重试 (${attempt + 1}/${delays.length})`,
-        );
-        await new Promise((r) => setTimeout(r, delay));
-      }
-    }
-  }
-
-  // ─── 弹幕模板（好感 x 心情双维度） ───
-  const DANMU_TEMPLATES = {
-    gift: [
-      {
-        minAffection: 51,
-        minMood: 60,
-        texts: ["超开心！", "好耶！", "太棒了~今天运气不错！"],
-      },
-      {
-        minAffection: 51,
-        minMood: 0,
-        texts: ["收到了，有心了", "放在桌角了~"],
-      },
-      { minAffection: 0, minMood: 60, texts: ["谢、谢谢", "哇……谢谢"] },
-      { minAffection: 0, minMood: 0, texts: ["嗯", "……收到了"] },
-    ],
-    quiet: [
-      {
-        minAffection: 51,
-        minMood: 60,
-        texts: ["你安静地待了一会儿……我居然觉得挺安心的", "不用说话也舒服~"],
-      },
-      {
-        minAffection: 51,
-        minMood: 0,
-        texts: ["你在这里……", "安静地待了一会儿"],
-      },
-      {
-        minAffection: 0,
-        minMood: 60,
-        texts: ["……有人在不说话", "沉默了但还好"],
-      },
-      { minAffection: 0, minMood: 0, texts: ["……", "……"] },
-    ],
-    hum: [
-      {
-        minAffection: 51,
-        minMood: 60,
-        texts: ["你哼的歌我听到了~挺好听的！", "哼着哼着心情好起来了"],
-      },
-      {
-        minAffection: 51,
-        minMood: 0,
-        texts: ["听到你哼歌了", "你刚才哼的那句我记住了"],
-      },
-      {
-        minAffection: 0,
-        minMood: 60,
-        texts: ["你在哼歌啊……", "调子还挺好听的"],
-      },
-      { minAffection: 0, minMood: 0, texts: ["……嗯", "……"] },
-    ],
-    doodle: [
-      {
-        minAffection: 51,
-        minMood: 60,
-        texts: ["这张便签我收起来了~画得好可爱！", "手绘小卡片太棒了！"],
-      },
-      {
-        minAffection: 51,
-        minMood: 0,
-        texts: ["收到便签了", "你画的我都留着呢"],
-      },
-      {
-        minAffection: 0,
-        minMood: 60,
-        texts: ["啊……便签！谢谢", "收到了……画得挺用心的"],
-      },
-      { minAffection: 0, minMood: 0, texts: ["……看到了"] },
-    ],
-    fan: [
-      {
-        minAffection: 51,
-        minMood: 60,
-        texts: ["好凉快！你真好~", "被你一吹整个人都清醒了"],
-      },
-      { minAffection: 51, minMood: 0, texts: ["凉快多了……谢谢", "风刚刚好"] },
-      { minAffection: 0, minMood: 60, texts: ["哇……谢谢", "好贴心"] },
-      { minAffection: 0, minMood: 0, texts: ["……嗯", "……"] },
-    ],
-    blanket: [
-      {
-        minAffection: 51,
-        minMood: 60,
-        texts: ["裹紧了~暖和！超级舒服", "毯子拉上来整个人都放松了"],
-      },
-      { minAffection: 51, minMood: 0, texts: ["暖和了", "裹紧……"] },
-      { minAffection: 0, minMood: 60, texts: ["啊……谢谢", "挺暖和的"] },
-      { minAffection: 0, minMood: 0, texts: ["……", "……"] },
-    ],
-    pillow: [
-      {
-        minAffection: 51,
-        minMood: 60,
-        texts: ["拍了拍继续干活~舒服！", "靠枕又蓬松了真好"],
-      },
-      { minAffection: 51, minMood: 0, texts: ["整理好了", "嗯……舒服点了"] },
-      { minAffection: 0, minMood: 60, texts: ["哦……谢谢", "好多了"] },
-      { minAffection: 0, minMood: 0, texts: ["……", "……还是不说话好了"] },
-    ],
-    brainrot: [
-      {
-        minAffection: 51,
-        minMood: 60,
-        texts: ["又在想什么怪问题…你脑洞真大哈哈哈", "哈哈哈哈哈这个好笑"],
-      },
-      {
-        minAffection: 51,
-        minMood: 0,
-        texts: ["又在说怪话了…", "今天脑洞关一下门"],
-      },
-      { minAffection: 0, minMood: 60, texts: ["……？", "啊？？"] },
-      { minAffection: 0, minMood: 0, texts: ["……又来", "……行吧"] },
-    ],
-    recharge: [
-      {
-        minAffection: 51,
-        minMood: 60,
-        texts: [
-          "满电！满血复活！又可以陪你到处逛了",
-          "充满精神了！再来三百回合！",
-        ],
-      },
-      { minAffection: 51, minMood: 0, texts: ["充好电了", "嗯…精神好了一点"] },
-      { minAffection: 0, minMood: 60, texts: ["充电完成了……谢谢", "电充满了"] },
-      { minAffection: 0, minMood: 0, texts: ["充电完成了……", "……"] },
-    ],
-    unplug: [
-      {
-        minAffection: 51,
-        minMood: 60,
-        texts: [
-          "又来！你这家伙！",
-          "喂——！！我刚写到一半！",
-          "你你你…有完没完了！",
-        ],
-      },
-      {
-        minAffection: 51,
-        minMood: 0,
-        texts: ["又来了……唉", "你按开关的手法越来越熟练了", "算了你高兴就好…"],
-      },
-      {
-        minAffection: 0,
-        minMood: 60,
-        texts: ["哇吓我一跳！", "诶——怎么回事！！", "？？？刚才发生了什么"],
-      },
-      { minAffection: 0, minMood: 0, texts: ["……你干嘛", "……", "……行吧"] },
-    ],
-  };
-
-  // ─── 生成弹幕文本（好感 x 心情双维度） ───
-  function generateBarrageText(type, itemId, itemName, icon, vars) {
-    const mood = vars?.mood ?? 60;
-    const affection = vars?.affection ?? 0;
-    const templateKey =
-      type === "gift" ? "gift" : type === "recharge" ? "recharge" : itemId;
-    const levels = DANMU_TEMPLATES[templateKey];
-    if (!levels) return "";
-    let chosen = "";
-    for (const level of levels) {
-      const affOk =
-        level.minAffection === undefined || affection >= level.minAffection;
-      const moodOk = level.minMood === undefined || mood >= level.minMood;
-      if (affOk && moodOk) {
-        chosen = level.texts[Math.floor(Math.random() * level.texts.length)];
-        break;
-      }
-    }
-    if (!chosen) return "";
-    if (type === "gift") {
-      return "" + (icon || "") + itemName + "~" + chosen;
-    }
-    return chosen;
-  }
-
-  // ─── 发弹幕到在干嘛（静默失败，不影响主流程） ───
-  async function sendBarrage(agentId, type, itemId, itemName, icon) {
-    try {
-      let buddyName = "";
-      let buddyColor = "";
-      try {
-        const cfgPath = path.join(HANA_HOME, "data", "zaiganma", "config.json");
-        if (fs.existsSync(cfgPath)) {
-          const raw = fs.readFileSync(cfgPath, "utf-8");
-          const zCfg = JSON.parse(raw);
-          const buddy = zCfg.buddies?.[agentId];
-          if (buddy) {
-            buddyName = buddy.name || "";
-            buddyColor = buddy.color || "";
-          }
-        }
-      } catch (eCfg) {}
-      const d = loadData();
-      const vars = d.partnerConfig?.[agentId]?.variables;
-      const content = generateBarrageText(type, itemId, itemName, icon, vars);
-      if (!content) return;
-      const text = buddyName ? buddyName + "：" + content : content;
-      const resp = await fetch("http://127.0.0.1:18900/send", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          text,
-          buddy_color: buddyColor || undefined,
-          framed: true,
-        }),
-        signal: AbortSignal.timeout(3000),
-      });
-      if (resp.ok) {
-        console.log("[闲不住] 弹幕发送成功:", text.slice(0, 30));
-      }
-    } catch (e) {
-      console.log(
-        "[闲不住] 弹幕发送跳过（在干嘛不可用）:",
-        e?.message?.slice(0, 50) || "unknown",
-      );
-    }
-  }
 
   app.post("/api/visit", async (c) => {
-    // 串行锁：visit 创建（load-modify-save）整体原子化，防止并发连点丢记录
-    return withDataLock(async () => {
-      const input = await readBody(c);
-      const data = loadData();
+    const input = await readBody(c);
+    const result = await performVisit(input, { bus: ctx.bus || ctx._bus });
+    return json(result.body, result.status);
+  });
 
-      const { type, itemId, to } = input;
-
-      if (!type || !itemId || !to) {
-        return json({ success: false, error: "缺少必要参数" }, 400);
-      }
-
-      // 输入校验：type 白名单 + 长度限制
-      const validTypes = ["interact", "gift", "prank"];
-      if (!validTypes.includes(type)) {
-        return json({ success: false, error: "无效的互动类型" }, 400);
-      }
-      if (
-        typeof itemId !== "string" ||
-        itemId.length > 50 ||
-        typeof to !== "string" ||
-        to.length > 100
-      ) {
-        return json({ success: false, error: "参数格式错误" }, 400);
-      }
-
-      let item;
-      if (type === "interact") {
-        item = (data.interactItems || []).find((i) => i.id === itemId);
-      } else if (type === "prank") {
-        item = (data.prankItems || []).find((i) => i.id === itemId);
-      } else if (type === "gift") {
-        item = (data.shopItems || []).find((i) => i.id === itemId);
-      }
-
-      if (!item) return json({ success: false, error: "项目不存在" }, 400);
-
-      // ── 恶作剧前置处理 ──
-      if (type === "prank" && itemId === "brainrot") {
-        // 扣光粒
-        const prankCost = 3;
-        if ((data.jar || 0) < prankCost) {
-          return json({ success: false, error: "光粒不够了 ✨" }, 400);
-        }
-        data.jar -= prankCost;
-
-        // 生成怪话
-        const brainrotText = await generateBrainrot();
-        if (!brainrotText) {
-          return json({ success: false, error: "怪话生成失败" }, 500);
-        }
-
-        // 推送
-        const ok = await pushToAgent(to, brainrotText);
-
-        // 创建 visit 记录并异步修改变量
-        if (!data.pendingVisits) data.pendingVisits = [];
-        const visit = {
-          id: nextId(),
-          type,
-          itemId: item.id,
-          itemName: item.name,
-          icon: item.icon,
-          price: 0,
-          to,
-          from: "owner",
-          createdAt: nowISO(),
-          status: "completed",
-        };
-        data.pendingVisits.push(visit);
-        saveData(data);
-
-        processVisitEvent(visit, to).catch((err) => {
-          console.error("[闲不住] 脑洞袭击变量更新失败:", err?.message || err);
-        });
-
-        sendBarrage(to, "prank", "brainrot", "说怪话", "");
-
-        if (!ok) {
-          return json({
-            success: true,
-            jar: data.jar,
-            brainrot: brainrotText,
-            injected: false,
-          });
-        }
-        return json({ success: true, jar: data.jar, injected: true });
-      }
-
-      // ── 检查模型是否已配置（恶作剧豁免：关机键/说怪话不依赖插件模型） ──
-      const llmOk = !!(data.llmConfig?.providerId && data.llmConfig?.modelId);
-      if (!llmOk && type !== "prank") {
-        return json(
-          {
-            success: false,
-            error: "请先打开闲不住页面底部「模型设置」配置模型后再使用",
-          },
-          400,
-        );
-      }
-
-      // ── 光粒变动 ──
-      if (type === "gift") {
-        if ((data.jar || 0) < item.price) {
-          return json({ success: false, error: "光粒不够了 ✨" }, 400);
-        }
-        data.jar -= item.price;
-        data.jar += 3; // 送礼回礼：助手回赠 3 光粒，让送礼不亏太多
-      } else if (type === "prank") {
-        const prankCost = itemId === "unplug" ? 5 : 3;
-        if ((data.jar || 0) < prankCost) {
-          return json({ success: false, error: "光粒不够了 ✨" }, 400);
-        }
-        data.jar -= prankCost;
-      }
-
-      // ── 创建 visit 记录（存但不推 pendingVisits，用于变量修改和小纸条） ──
-      const visit = {
-        id: nextId(),
-        type,
-        itemId: item.id,
-        itemName: item.name,
-        icon: item.icon,
-        price: item.price || 0,
-        to,
-        from: "owner",
-        createdAt: nowISO(),
-        status: "pushed",
-      };
-
-      if (type === "prank" && itemId === "unplug") {
-        // ── 关机键：生成崩溃剧本 → 存 pendingVisit → abort → 推送「重启！」──
-        const crashReply = await generateCrashReply(to);
-        if (crashReply) {
-          visit.autoReply = crashReply;
-          console.log("[闲不住] 崩溃剧本已生成，长度：" + crashReply.length);
-        }
-        if (!data.pendingVisits) data.pendingVisits = [];
-        visit.status = "pending";
-        data.pendingVisits.push(visit);
-        saveData(data);
-
-        // 弹幕在 abort 之前发送，避免 abort 中断后续请求
-        sendBarrage(to, "prank", "unplug", "关机键", "");
-
-        try {
-          const bus = ctx.bus || ctx._bus;
-          const latestSession = findLatestSessionPath(to);
-          if (bus && latestSession) {
-            await bus.request("session:abort", {
-              sessionPath: latestSession,
-              reason: "悄咪咪按了关机键 🔌",
-            });
-            console.log("[闲不住] abort 完成 → " + to);
-            await bus.request("session:send", {
-              text: "重启！",
-              sessionPath: latestSession,
-            });
-            console.log("[闲不住] 关机键「重启！」注入成功 → " + to);
-          }
-        } catch (e) {
-          console.error("[闲不住] 关机键处理失败:", e?.message || e);
-        }
-        // 异步修改变量+小纸条（统一在下方 processVisitEvent 处理，避免重复调用）
-      } else {
-        // ── 互动 / 礼物：存为 completed（展板不显示，check-visits 可查具体内容） ──
-        visit.status = "completed";
-        if (!data.pendingVisits) data.pendingVisits = [];
-        data.pendingVisits.push(visit);
-        saveData(data);
-
-        // 推送统一通知：带上礼物/互动名，助手一眼可知内容，可再调 check-visits 读细节
-        const _n = getUserDisplayName();
-        const _pushVariants =
-          type === "gift"
-            ? [
-                `📦 收到来自${_n}的一份礼物：${item.icon || ""}${item.name}～`,
-                `🎁 ${_n}给你带了东西：${item.icon || ""}${item.name}～`,
-              ]
-            : [
-                `📬 收到来自${_n}的一条互动：${item.icon || ""}${item.name}～`,
-                `📬 ${_n}拍了拍你：${item.icon || ""}${item.name}～`,
-              ];
-        let pushText =
-          _pushVariants[Math.floor(Math.random() * _pushVariants.length)];
-
-        pushToAgent(to, pushText).catch((err) => {
-          console.error("[闲不住] 互动/礼物推送失败:", err?.message || err);
-        });
-
-        sendBarrage(to, type, itemId, item.name, item.icon);
-      }
-
-      // ── 异步修改变量 + 生成小纸条 ──
-      processVisitEvent(visit, to).catch((err) => {
-        console.error("[闲不住] 异步处理事件失败:", err?.message || err);
-      });
-
-      return json({
-        success: true,
-        visitId: visit.id,
-        jar: data.jar,
-        item: { id: item.id, icon: item.icon, name: item.name, type },
-      });
-    });
+  // ════════════════════════════════════════
+  //  风铃悬浮球 — 启动 / 停止 / 状态 / 依赖检查
+  // ════════════════════════════════════════
+  app.post("/api/fengling/start", async (c) => {
+    const res = startFengling(ctx.bus || ctx._bus);
+    return json(res, res.ok ? 200 : 400);
+  });
+  app.post("/api/fengling/stop", async (c) => {
+    const res = stopFengling();
+    return json(res, res.ok ? 200 : 400);
+  });
+  app.get("/api/fengling/status", async (c) => {
+    const st = getFenglingState();
+    const deps = await checkFenglingDeps();
+    return json({ ...st, ...deps });
+  });
+  // 风铃自动启动状态（消费式读取：dismissed 读一次即清除；Hana 重启内存重置）
+  app.get("/api/fengling/autoboot", async (c) => {
+    const st = getFenglingState();
+    const dismissed = consumeFenglingDismissed();
+    const deps = await checkFenglingDeps();
+    return json({ ok: true, running: st.running, dismissed, pyQtOk: deps.pyQtOk });
   });
 
   // ════════════════════════════════════════
@@ -1579,22 +1099,9 @@ export default async function register(app, ctx = {}) {
   // ════════════════════════════════════════
   app.get("/api/current-agent", async (c) => {
     try {
-      // 零依赖方案（替代 sqlite3 CLI）：遍历所有伙伴，找 mtime 最新的会话文件所属 agent
       const partnerIds = getPartnerIds(loadData());
-      let best = null;
-      let bestTime = 0;
-      for (const id of partnerIds) {
-        const p = findLatestSessionPath(id);
-        if (!p) continue;
-        try {
-          const st = fs.statSync(p);
-          if (st.mtimeMs > bestTime) {
-            bestTime = st.mtimeMs;
-            best = id;
-          }
-        } catch {}
-      }
-      return json({ success: true, agentId: best || null });
+      const agentId = findMostActiveAgentId(partnerIds);
+      return json({ success: true, agentId });
     } catch (e) {
       console.error("[闲不住] 获取当前 agent 失败:", e?.message || e);
       return json({ success: false, error: e?.message || "查询失败" });
@@ -1659,6 +1166,7 @@ export default async function register(app, ctx = {}) {
     );
     return json({ success: true, count: Object.keys(scanned).length });
   });
+
 
   // ════════════════════════════════════════
   //  GET /api/check-update — 检查 GitHub 更新
