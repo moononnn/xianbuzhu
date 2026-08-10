@@ -4,3 +4,5 @@ data.json.bak
 小纸条/
 *.md.bak
 .DS_Store
+__pycache__/
+*.pyc
