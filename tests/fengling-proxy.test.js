@@ -18,7 +18,7 @@ function writeData() {
     llmConfig: { providerId: "test", modelId: "test" },
     partnerConfig: {
       hanako: { name: "小花", variables: { mood: 60, energy: 80, affection: 10 } },
-      yumi: { name: "悠米", variables: { mood: 60, energy: 80, affection: 10 } },
+      helperB: { name: "伙伴B", variables: { mood: 60, energy: 80, affection: 10 } },
     },
     pendingVisits: [],
     shopItems: [],
@@ -46,14 +46,14 @@ test("风铃代理由服务端锁定点击瞬间的最活跃会话", async () =>
   writeData();
 
   const missing = await performFenglingVisit(
-    { type: "interact", itemId: "quiet", to: "yumi" },
+    { type: "interact", itemId: "quiet", to: "helperB" },
     null,
   );
   assert.equal(missing.status, 409);
   assert.match(missing.body.error, /还没找到/);
 
   writeSession("hanako", "2026-08-09T04:00:00.000Z");
-  writeSession("yumi", "2026-08-09T03:00:00.000Z");
+  writeSession("helperB", "2026-08-09T03:00:00.000Z");
   const captured = {};
   const visitFn = async (input, deps) => {
     captured.input = input;
@@ -62,13 +62,13 @@ test("风铃代理由服务端锁定点击瞬间的最活跃会话", async () =>
   };
   const bus = { request: async () => true };
   const result = await performFenglingVisit(
-    { type: "interact", itemId: "quiet", to: "yumi" },
+    { type: "interact", itemId: "quiet", to: "helperB" },
     bus,
     visitFn,
   );
 
   assert.equal(result.status, 200);
   assert.equal(result.body.target.id, "hanako");
-  assert.equal(captured.input.to, "hanako", "客户端传入的 yumi 必须被覆盖");
+  assert.equal(captured.input.to, "hanako", "客户端传入的 helperB 必须被覆盖");
   assert.equal(captured.deps.bus, bus);
 });

@@ -286,13 +286,13 @@ class FenglingInteractionTests(unittest.TestCase):
             menu.refresh()
         def fake_visit(_vtype, _item_id):
             self.assertFalse(menu.btn_interact.isEnabled(), "请求期间按钮应禁用，防止重复点击")
-            return {"success": True, "target": {"id": "yumi", "name": "悠米"}}
+            return {"success": True, "target": {"id": "helperB", "name": "伙伴B"}}
 
         with patch.object(self.ball, "_do_visit", side_effect=fake_visit), patch.object(
             menu, "_refresh_jar"
         ):
             menu._do_action("interact", "quiet")
-        self.assertEqual(menu.lbl_target.text(), "跟随当前对话 · 悠米")
+        self.assertEqual(menu.lbl_target.text(), "跟随当前对话 · 伙伴B")
         self.assertEqual(menu.lbl_feedback.text(), "送达了")
         menu.close()
 
