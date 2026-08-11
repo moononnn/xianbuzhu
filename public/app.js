@@ -1367,7 +1367,7 @@
         body: JSON.stringify({ providerId: pid, modelId: mid }),
       });
       if (data.success) {
-        state.llmConfig = data.config || state.llmConfig;
+        state.llmConfig = { providerId: pid, modelId: mid, updatedAt: new Date().toISOString() };
         if (statusEl) statusEl.textContent = '✅ 已保存';
         toast('模型设置已保存');
         render();
@@ -1380,10 +1380,21 @@
   };
 
   window._tbLLMTest = async function() {
+    var providerSel = document.getElementById('llm-provider');
+    var modelSel = document.getElementById('llm-model');
+    var pid = providerSel ? providerSel.value : '';
+    var mid = modelSel ? modelSel.value : '';
     var resultEl = document.getElementById('llm-test-result');
+    if (!pid || !mid) {
+      if (resultEl) resultEl.innerHTML = '<span style="color:var(--color-error)">请先选择供应商和模型</span>';
+      return;
+    }
     if (resultEl) resultEl.innerHTML = '<span style="color:var(--color-muted)">⏳ 正在测试连接…</span>';
     try {
-      var data = await api('/api/llm-test', { method: 'POST' });
+      var data = await api('/api/llm-test', {
+        method: 'POST',
+        body: JSON.stringify({ providerId: pid, modelId: mid }),
+      });
       if (data.success) {
         if (resultEl) resultEl.innerHTML = '<span style="color:var(--color-ink-2)">✅ ' + (data.message || '连接成功') + '</span>';
       } else {

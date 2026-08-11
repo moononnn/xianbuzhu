@@ -51,6 +51,8 @@ except ImportError:
     QSoundEffect = None
 
 API_BASE = os.environ.get("XIANBUZHU_API", "http://127.0.0.1:18902")
+# 本地代理随机鉴权 token：由 Hana 侧生成并随环境变量注入，请求时带 Authorization: Bearer
+API_TOKEN = os.environ.get("XIANBUZHU_TOKEN", "")
 HANA_HOME = os.environ.get("HANA_HOME", os.path.join(os.path.expanduser("~"), ".hanako"))
 STATE_PATH = os.path.join(HANA_HOME, "data", "work-visit", "fengling-state.json")
 AUDIO_CACHE_DIR = os.path.join(HANA_HOME, "data", "work-visit", "fengling-audio-cache")
@@ -251,8 +253,16 @@ def prepare_sound_file(data, volume, cache_dir=AUDIO_CACHE_DIR):
 # ─────────────────────────────
 #  HTTP 客户端（标准库，零额外依赖）
 # ─────────────────────────────
+def _headers():
+    h = {"Content-Type": "application/json"}
+    if API_TOKEN:
+        h["Authorization"] = "Bearer " + API_TOKEN
+    return h
+
+
 def api_get(path, timeout=5):
-    with urllib.request.urlopen(API_BASE + path, timeout=timeout) as r:
+    req = urllib.request.Request(API_BASE + path, headers=_headers(), method="GET")
+    with urllib.request.urlopen(req, timeout=timeout) as r:
         return json.loads(r.read().decode("utf-8"))
 
 
@@ -260,7 +270,7 @@ def api_post(path, payload, timeout=12):
     req = urllib.request.Request(
         API_BASE + path,
         data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
+        headers=_headers(),
         method="POST",
     )
     with urllib.request.urlopen(req, timeout=timeout) as r:
