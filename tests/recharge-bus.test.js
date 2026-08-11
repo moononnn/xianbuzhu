@@ -90,11 +90,16 @@ test("recharge: 推送携带 bus，mockBus 收到 session:send 且文本含「�
   assert.equal(body.success, true);
   assert.equal(body.energy, 100);
 
-  // pushToAgent 链路：findLatestSessionId 成功 → bus.request("session:send")
+  // pushToAgent 链路：findLatestSessionPath 成功 → bus.request("session:send") 携带 sessionPath
   const sends = busCalls.filter((x) => x.topic === "session:send");
   assert.equal(sends.length, 1, "应有一次 session:send 推送（bus 已传入）");
   assert.match(sends[0].payload.text, /充电|充了电/, "推送文案应为充电提示");
-  assert.ok(sends[0].payload.sessionId, "推送应带 sessionId");
+  assert.ok(sends[0].payload.sessionPath, "推送应带 sessionPath（文件路径）");
+  assert.match(
+    sends[0].payload.sessionPath,
+    /agents[\\\/]hanako[\\\/]sessions[\\\/]/,
+    "sessionPath 必须是桌面会话路径（不被 subagent 会话污染）",
+  );
 });
 
 test("recharge: 未登记助手 ID 被拒（isValidAgentId + partnerConfig）", async () => {

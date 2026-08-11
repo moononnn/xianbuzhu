@@ -6,3 +6,6 @@ data.json.bak
 .DS_Store
 __pycache__/
 *.pyc
+
+# 本地发布间隔账本（并入 CHANGELOG 后清空，不上仓库）
+PENDING_CHANGES.md

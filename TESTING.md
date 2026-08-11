@@ -3,12 +3,19 @@
 ## JavaScript 回归测试
 
 ```powershell
+# CI（Linux，Node 24）：并发跑，与 GitHub Actions 一致
 node --test tests/*.test.js
+
+# Windows 本地：建议串行（原因见下）
+node --test --test-concurrency=1 tests/*.test.js
 ```
 
-（与 CI 完全一致：并发跑。遇到并发下偶发失败时，优先排查测试间的共享状态，不要改成串行掩盖。）
+> ⚠️ Windows 本地已知问题：Node test runner 在 Windows 上并发跑较多测试文件时，偶发
+> `Unable to deserialize cloned data due to invalid or unsupported version` 失败
+> （子进程 IPC 消息反序列化损坏，与测试内容无关——同一批文件串行必过、Linux CI 必过）。
+> 本地验证以串行为准；不要为此改测试内容，CI 保持并发。
 
-覆盖：互动/送礼/恶作剧业务、并发写入、数据备份恢复、变量迁移与每日重置、伙伴刷新、会话选择（跨助手、长会话、真实毫秒时间戳）、风铃代理强制重判目标、助手 ID 白名单（performVisit 路径穿越/原型污染/未登记助手拒绝）。
+覆盖：互动/送礼/恶作剧业务、并发写入、数据备份恢复、变量迁移与每日重置、伙伴刷新、会话选择（跨助手、长会话、真实毫秒时间戳）、风铃代理强制重判目标、助手 ID 白名单（performVisit 路径穿越/原型污染/未登记助手拒绝）、推送链路（bus 携带、总超时兜底、锁释放、sessionPath 目标不被 subagent 会话污染）。
 
 ## 风铃回归测试
 

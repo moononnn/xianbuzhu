@@ -50,10 +50,23 @@
   async function api(path, opts) {
     opts = opts || {};
     var url = BASE + path + AUTH;
-    var resp = await fetch(url, Object.assign({}, opts, {
-      headers: Object.assign({ 'Content-Type': 'application/json' }, opts.headers || {}),
-    }));
-    return resp.json();
+    // 请求统一 30s 超时：后端万一卡住，前端自己放弃并报错，不再无限转圈
+    var controller = new AbortController();
+    var timer = setTimeout(function() { controller.abort(); }, 30000);
+    try {
+      var resp = await fetch(url, Object.assign({}, opts, {
+        headers: Object.assign({ 'Content-Type': 'application/json' }, opts.headers || {}),
+        signal: controller.signal,
+      }));
+      return resp.json();
+    } catch (e) {
+      if (e && e.name === 'AbortError') {
+        throw new Error('请求超时，请重试');
+      }
+      throw e;
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   // ─── 状态 ───
@@ -580,7 +593,7 @@
       }
     } catch (e) {
       clearPersistentToast();
-      toast('网络错误', 'error');
+      toast(e && e.message ? e.message : '网络错误', 'error');
     }
   };
 
