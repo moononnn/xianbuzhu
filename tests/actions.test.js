@@ -97,14 +97,14 @@ test("回礼推送文案：互动/礼物/恶作剧都带回礼来源，普通动
   const visit = { type: "interact", itemId: "doodle" };
   applyReturnContext(visit, makeReturnHeart());
   const item = { id: "doodle", name: "往ta桌上放了张手绘小卡片", icon: "🎨" };
-  const returnText = buildVisitPushText("interact", item, "主人", visit, () => 0);
+  const returnText = buildVisitPushText("interact", item, "朋友", visit, () => 0);
   assert.match(returnText, /回礼/);
   assert.match(returnText, /💐一束花/);
 
   const giftText = buildVisitPushText(
     "gift",
     { id: "coffee", name: "咖啡", icon: "☕" },
-    "主人",
+    "朋友",
     visit,
     () => 0,
   );
@@ -114,7 +114,7 @@ test("回礼推送文案：互动/礼物/恶作剧都带回礼来源，普通动
   const prankText = buildBrainrotPushText(
     "突然想到：一只会写代码的猫，最喜欢哪种语言？喵语。",
     { id: "brainrot", name: "冷不丁说句怪话", icon: "🧠" },
-    "主人",
+    "朋友",
     visit,
   );
   assert.match(prankText, /回礼恶作剧/);
@@ -123,7 +123,7 @@ test("回礼推送文案：互动/礼物/恶作剧都带回礼来源，普通动
   const normalText = buildVisitPushText(
     "interact",
     item,
-    "主人",
+    "朋友",
     {},
     () => 0,
   );
@@ -181,7 +181,7 @@ test("performVisit: 多条心意回礼推送文案告知攒着的份数", () => 
   const text = buildVisitPushText(
     "interact",
     { id: "doodle", name: "往ta桌上放了张手绘小卡片", icon: "🎨" },
-    "主人",
+    "朋友",
     visit,
     () => 0,
   );
