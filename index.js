@@ -6,7 +6,9 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadData, saveData, describeMood } from "./lib/data.js";
-import { scanPartners } from "./lib/config.js";
+import { getPartnerIds, scanPartners } from "./lib/config.js";
+import { startHeartbeat } from "./lib/heartbeat.js";
+import { stopFusionCoordinator } from "./lib/fusion.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -33,6 +35,16 @@ class WorkVisitPlugin {
           if (oldConfig[id]?.decorations)
             info.decorations = oldConfig[id].decorations;
           if (oldConfig[id]?.hidden) info.hidden = oldConfig[id].hidden;
+          if (oldConfig[id]?.surfaceLayer)
+            info.surfaceLayer = oldConfig[id].surfaceLayer;
+          if (oldConfig[id]?.innerLayer)
+            info.innerLayer = oldConfig[id].innerLayer;
+          if (oldConfig[id]?.temperamentSource)
+            info.temperamentSource = oldConfig[id].temperamentSource;
+          if (oldConfig[id]?.temperamentAnalyzedAt)
+            info.temperamentAnalyzedAt = oldConfig[id].temperamentAnalyzedAt;
+          if (oldConfig[id]?.heartRhythm)
+            info.heartRhythm = oldConfig[id].heartRhythm;
         }
         data.partnerConfig = scanned;
         saveData(data);
@@ -119,6 +131,11 @@ class WorkVisitPlugin {
 
     // ── 漂流瓶独立插件联动桥（只读、版本化；未安装漂流瓶则无人调用，无副作用） ──
     this.registerBridgeHandlers();
+
+    // ── 主动心意心跳：低频、可停止，错过不补 ──
+    this._heartbeatStop?.();
+    this._heartbeatStop = startHeartbeat(this.ctx || {});
+    console.log("[闲不住] 主动心意心跳已启动");
   }
 
   // 给「漂流瓶」独立插件提供两个只读桥：
@@ -137,7 +154,9 @@ class WorkVisitPlugin {
           try {
             const data = loadData();
             const partners = {};
+            const visibleIds = new Set(getPartnerIds(data));
             for (const [id, cfg] of Object.entries(data.partnerConfig || {})) {
+              if (!visibleIds.has(id)) continue;
               const vars = cfg?.variables || {};
               partners[id] = {
                 moodText: describeMood(vars.mood),
@@ -169,6 +188,9 @@ class WorkVisitPlugin {
   }
 
   async onunload() {
+    this._heartbeatStop?.();
+    this._heartbeatStop = null;
+    await stopFusionCoordinator({ restore: true, force: true });
     for (const un of this._bridgeUnregisters || []) {
       try {
         if (typeof un === "function") un();
