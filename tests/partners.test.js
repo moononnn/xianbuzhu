@@ -2,7 +2,11 @@
 // 覆盖：刷新找回（清除 hidden + 保留装饰/颜色/变量）
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mergeRefreshedPartners } from "../lib/config.js";
+import {
+  getPartnerIds,
+  getVisiblePartnerConfig,
+  mergeRefreshedPartners,
+} from "../lib/config.js";
 
 test("mergeRefreshedPartners: 刷新找回所有伙伴（清除 hidden）", () => {
   const old = {
@@ -33,6 +37,25 @@ test("mergeRefreshedPartners: 保留旧配置的颜色/变量/装饰", () => {
   assert.equal(out.hanako.color, "#4CAF50", "旧颜色优先保留");
   assert.equal(out.hanako.variables.mood, 60, "旧变量优先保留");
   assert.deepEqual(out.hanako.decorations, deco, "装饰原样保留");
+});
+
+test("getPartnerIds: 隐藏助手不进入当前闲不住列表", () => {
+  const data = {
+    partnerConfig: {
+      visible: { name: "可见" },
+      hidden: { name: "测试探针", hidden: true },
+    },
+  };
+  assert.deepEqual(getPartnerIds(data), ["visible"]);
+  assert.deepEqual(Object.keys(getVisiblePartnerConfig(data)), ["visible"]);
+});
+
+test("mergeRefreshedPartners: 保留心意节奏设置", () => {
+  const out = mergeRefreshedPartners(
+    { helper: { name: "助手", heartRhythm: "quiet" } },
+    { helper: { name: "助手", color: "#111", variables: {} } },
+  );
+  assert.equal(out.helper.heartRhythm, "quiet");
 });
 
 test("mergeRefreshedPartners: 无旧配置时用扫描结果，不报错", () => {

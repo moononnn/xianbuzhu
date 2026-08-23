@@ -337,6 +337,25 @@ test("performDailyReset: 无昨日记录/无 effortLP 字段 = 不扣（兼容�
   assert.equal(data.partnerConfig.helperA.variables.energy, 100);
 });
 
+test("performDailyReset: 有效主动心意期间暂缓旧的疏远衰减，避免双重惩罚", () => {
+  const data = {
+    days: {},
+    partnerConfig: {
+      hanako: { name: "小花", variables: { energy: 100, mood: 60, affection: 38 } },
+      helperA: { name: "伙伴A", variables: { energy: 100, mood: 60, affection: 38 } },
+    },
+    heartInbox: [{
+      id: "heart-1",
+      partnerId: "hanako",
+      status: "unread",
+      expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+    }],
+  };
+  performDailyReset(data, "2026-08-05");
+  assert.equal(data.partnerConfig.hanako.variables.affection, 38);
+  assert.equal(data.partnerConfig.helperA.variables.affection, 37);
+});
+
 test("performDailyReset: 光粒封顶 30 惩罚（超高光粒），精力不低于 30", () => {
   const data = {
     days: {

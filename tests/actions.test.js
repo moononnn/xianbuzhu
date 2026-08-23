@@ -11,7 +11,12 @@ import path from "node:path";
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "wv-actions-"));
 process.env.HANA_HOME = tmp;
 
-const { performVisit } = await import("../lib/actions.js");
+const {
+  performVisit,
+  applyReturnContext,
+  buildVisitPushText,
+  buildBrainrotPushText,
+} = await import("../lib/actions.js");
 
 function writeData(overrides) {
   const data = {
@@ -45,6 +50,25 @@ function readData() {
   );
 }
 
+function writeSession() {
+  const dir = path.join(tmp, "agents", "hanako", "sessions");
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, "return-test.jsonl");
+  fs.writeFileSync(
+    file,
+    JSON.stringify({
+      type: "message",
+      message: {
+        role: "user",
+        timestamp: "2026-08-19T10:56:00+08:00",
+        content: [{ type: "text", text: "测试会话" }],
+      },
+    }) + "\n",
+    "utf8",
+  );
+  return file;
+}
+
 function makeBus() {
   const bus = { calls: [] };
   bus.request = async (topic, payload) => {
@@ -54,7 +78,180 @@ function makeBus() {
   return bus;
 }
 
+function makeReturnHeart(overrides = {}) {
+  const now = Date.now();
+  return {
+    id: "heart-1",
+    partnerId: "hanako",
+    eventType: "gift",
+    gift: { id: "bouquet", name: "一束花", icon: "💐", price: 120 },
+    status: "read",
+    deliveredAt: new Date(now - 60_000).toISOString(),
+    expiresAt: new Date(now + 24 * 3600_000).toISOString(),
+    createdAt: new Date(now - 120_000).toISOString(),
+    ...overrides,
+  };
+}
+
+test("回礼推送文案：互动/礼物/恶作剧都带回礼来源，普通动作不带", () => {
+  const visit = { type: "interact", itemId: "doodle" };
+  applyReturnContext(visit, makeReturnHeart());
+  const item = { id: "doodle", name: "往ta桌上放了张手绘小卡片", icon: "🎨" };
+  const returnText = buildVisitPushText("interact", item, "玥儿", visit, () => 0);
+  assert.match(returnText, /回礼/);
+  assert.match(returnText, /💐一束花/);
+
+  const giftText = buildVisitPushText(
+    "gift",
+    { id: "coffee", name: "咖啡", icon: "☕" },
+    "玥儿",
+    visit,
+    () => 0,
+  );
+  assert.match(giftText, /回礼/);
+  assert.match(giftText, /☕咖啡/);
+
+  const prankText = buildBrainrotPushText(
+    "突然想到：一只会写代码的猫，最喜欢哪种语言？喵语。",
+    { id: "brainrot", name: "冷不丁说句怪话", icon: "🧠" },
+    "玥儿",
+    visit,
+  );
+  assert.match(prankText, /回礼恶作剧/);
+  assert.match(prankText, /喵语/);
+
+  const normalText = buildVisitPushText(
+    "interact",
+    item,
+    "玥儿",
+    {},
+    () => 0,
+  );
+  assert.doesNotMatch(normalText, /回礼/);
+});
+
+test("performVisit: 命中最新主动心意时写入回礼关联并消费一次", async () => {
+  writeData({ heartInbox: [makeReturnHeart()] });
+  const r = await performVisit(
+    { type: "gift", itemId: "coffee", to: "hanako" },
+    { bus: makeBus() },
+  );
+  assert.equal(r.status, 200);
+  assert.equal(r.body.isReturn, true);
+  const saved = readData();
+  assert.equal(saved.pendingVisits[0].isReturn, true);
+  assert.equal(saved.pendingVisits[0].returnOfHeartId, "heart-1");
+  assert.equal(saved.heartInbox[0].responseVisitId, saved.pendingVisits[0].id);
+  assert.equal(saved.heartInbox[0].respondedAt != null, true);
+});
+
+test("performVisit: 一次互动聚合回礼全部未回应心意并写入关联", async () => {
+  const now = Date.now();
+  writeData({
+    heartInbox: [
+      makeReturnHeart({ id: "heart-old", createdAt: new Date(now - 3600_000).toISOString() }),
+      makeReturnHeart({ id: "heart-new", createdAt: new Date(now - 60_000).toISOString() }),
+    ],
+  });
+  const r = await performVisit(
+    { type: "gift", itemId: "coffee", to: "hanako" },
+    { bus: makeBus() },
+  );
+  assert.equal(r.status, 200);
+  assert.equal(r.body.isReturn, true);
+  assert.equal(r.body.returnOfHeartCount, 2);
+  const saved = readData();
+  const visit = saved.pendingVisits[0];
+  assert.equal(visit.isReturn, true);
+  assert.deepEqual(visit.returnOfHeartIds, ["heart-old", "heart-new"]);
+  assert.equal(visit.returnOfHeartId, "heart-new", "最新一份作为主回礼来源");
+  assert.equal(
+    saved.heartInbox.every((heart) => heart.responseVisitId === visit.id),
+    true,
+    "全部未回应心意一次性绑定同一次回礼",
+  );
+});
+
+test("performVisit: 多条心意回礼推送文案告知攒着的份数", () => {
+  const visit = { type: "interact", itemId: "doodle" };
+  applyReturnContext(visit, [
+    makeReturnHeart({ id: "heart-old", gift: { id: "coffee", name: "咖啡", icon: "☕", price: 25 } }),
+    makeReturnHeart({ id: "heart-new" }),
+  ]);
+  const text = buildVisitPushText(
+    "interact",
+    { id: "doodle", name: "往ta桌上放了张手绘小卡片", icon: "🎨" },
+    "玥儿",
+    visit,
+    () => 0,
+  );
+  assert.match(text, /回礼/);
+  assert.match(text, /2 份心意/);
+  assert.match(text, /攒下/);
+});
+
+test("performVisit: 手动指定 sessionPath 时不会回退到该助手的最新对话", async () => {
+  const fixedPath = writeSession();
+  const bus = makeBus();
+  writeData();
+  const result = await performVisit(
+    { type: "interact", itemId: "quiet", to: "hanako", sessionPath: fixedPath },
+    { bus },
+  );
+  assert.equal(result.status, 200);
+  assert.equal(bus.calls[0].payload.sessionPath, fixedPath);
+});
+
+test("performVisit: 实际 session 推送包含回礼语义，怪话回礼也保留原文", async () => {
+  writeSession();
+  try {
+    writeData({ heartInbox: [makeReturnHeart()] });
+    const interactBus = makeBus();
+    await performVisit(
+      { type: "interact", itemId: "quiet", to: "hanako" },
+      { bus: interactBus },
+    );
+    assert.match(interactBus.calls[0].payload.text, /回礼/);
+    assert.match(interactBus.calls[0].payload.text, /一束花/);
+
+    writeData({ llmConfig: {}, heartInbox: [makeReturnHeart({ id: "heart-2" })] });
+    const prankBus = makeBus();
+    await performVisit(
+      { type: "prank", itemId: "brainrot", to: "hanako" },
+      { bus: prankBus },
+    );
+    assert.match(prankBus.calls[0].payload.text, /回礼恶作剧/);
+    assert.match(prankBus.calls[0].payload.text, /你今天看起来有点奇怪|突然想到/);
+  } finally {
+    fs.rmSync(path.join(tmp, "agents"), { recursive: true, force: true });
+  }
+});
+
 // ── 参数校验 ──
+test("performVisit: 回礼关机键保留重启演出并把来源写入 pending visit", async () => {
+  writeSession();
+  try {
+    writeData({ llmConfig: {}, heartInbox: [makeReturnHeart()] });
+    const bus = makeBus();
+    const r = await performVisit(
+      { type: "prank", itemId: "unplug", to: "hanako" },
+      { bus },
+    );
+    assert.equal(r.status, 200);
+    assert.equal(r.body.isReturn, true);
+    const saved = readData();
+    assert.equal(saved.pendingVisits[0].isReturn, true);
+    assert.equal(saved.pendingVisits[0].returnOfHeartId, "heart-1");
+    assert.deepEqual(
+      bus.calls.map((call) => call.topic),
+      ["session:abort", "session:send"],
+    );
+    assert.equal(bus.calls[1].payload.text, "重启！");
+  } finally {
+    fs.rmSync(path.join(tmp, "agents"), { recursive: true, force: true });
+  }
+});
+
 test("performVisit: 缺参数返回 400", async () => {
   writeData();
   const r = await performVisit({ type: "gift", itemId: "coffee" }, { bus: makeBus() });
@@ -199,6 +396,20 @@ test("performVisit: 原型污染 to 被拒（__proto__）", async () => {
   );
   assert.equal(r.status, 400);
   assert.match(r.body.error, /无效的助手 ID/);
+});
+
+test("performVisit: 已隐藏助手不再接受新的互动", async () => {
+  writeData({
+    partnerConfig: {
+      hanako: { name: "小花", hidden: true, variables: { mood: 60, affection: 10 } },
+    },
+  });
+  const r = await performVisit(
+    { type: "gift", itemId: "coffee", to: "hanako" },
+    { bus: makeBus() },
+  );
+  assert.equal(r.status, 400);
+  assert.match(r.body.error, /不在闲不住列表/);
 });
 
 test("performVisit: 未登记的助手 ID 被拒（partnerConfig 白名单）", async () => {

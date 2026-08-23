@@ -1,11 +1,15 @@
 # -*- coding: utf-8 -*-
 import io
 import math
+import os
 import random
 import sys
+import tempfile
 import unittest
 import wave
 from pathlib import Path
+
+os.environ["HANA_HOME"] = tempfile.mkdtemp(prefix="wv-fengling-layout-")
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "python"))
@@ -22,7 +26,9 @@ from fengling_app import (
     CLAPPER_RY,
     CLAPPER_SPRING,
     MAX_WIND_STRENGTH,
+    MENU_ANCHOR_RATIO,
     MIN_WIND_STRENGTH,
+    PANEL_ANCHOR_RATIO,
     RENDER_SCALE,
     calculate_entry_wind,
     chime_volume_from_impact,
@@ -30,8 +36,10 @@ from fengling_app import (
     linkage_curve_controls,
     linkage_points,
     point_in_chime_zone,
+    popup_anchor_y,
     resolve_clapper_collision,
     resolve_hover_state,
+    normalize_sound_state,
     resolve_saved_volume,
     should_attempt_chime,
     wind_strength_from_speed,
@@ -56,6 +64,25 @@ class FenglingLayoutTests(unittest.TestCase):
             clamp_position(-50, -20, 108, 108, 0, 0, 1706, 1066),
             (16, 16),
         )
+
+    def test_anchor_ratio_places_bell_above_panel_and_menu(self):
+        # 左键面板：铃铛中心在面板高度 38% 处（面板主体在铃铛下方，悬浮球偏好规范）
+        y = popup_anchor_y((100, 100, 108, 108), 300, (0, 0, 800, 600), PANEL_ANCHOR_RATIO)
+        self.assertEqual(y, 100 + 54 - int(300 * 0.38))  # 154 - 114 = 40
+        self.assertEqual(y, 40)
+        # 右键菜单：铃铛中心在菜单高度 33% 处（菜单主体在铃铛下方）
+        y = popup_anchor_y((100, 100, 108, 108), 300, (0, 0, 800, 600), MENU_ANCHOR_RATIO)
+        self.assertEqual(y, 100 + 54 - int(300 * 0.33))  # 154 - 99 = 55
+        self.assertEqual(y, 55)
+        # 两个比例都应低于居中（主体在下方）
+        self.assertLess(PANEL_ANCHOR_RATIO, 0.5)
+        self.assertLess(MENU_ANCHOR_RATIO, 0.5)
+
+    def test_popup_anchor_y_clamps_within_screen(self):
+        y = popup_anchor_y((100, 0, 108, 108), 300, (0, 0, 800, 600), 0.9)
+        self.assertEqual(y, 0)
+        y = popup_anchor_y((100, 500, 108, 108), 300, (0, 0, 800, 600), 0.1)
+        self.assertEqual(y, 300)
 
     def test_wind_strength_grows_smoothly_with_cursor_speed(self):
         slow = wind_strength_from_speed(80)
@@ -202,6 +229,19 @@ class FenglingLayoutTests(unittest.TestCase):
         self.assertEqual(resolve_saved_volume({"soundEnabled": True}), 0.65)
         self.assertEqual(resolve_saved_volume({"soundVolume": 0.9}), 1.0)
         self.assertEqual(resolve_saved_volume({"soundVolume": "bad"}), 0.0)
+
+    def test_sound_state_materializes_default_and_legacy_values(self):
+        state = {}
+        volume, changed = normalize_sound_state(state)
+        self.assertEqual(volume, 0.0)
+        self.assertTrue(changed)
+        self.assertEqual(state, {"soundVolume": 0.0, "soundEnabled": False})
+
+        state = {"soundEnabled": True}
+        volume, changed = normalize_sound_state(state)
+        self.assertEqual(volume, 0.65)
+        self.assertTrue(changed)
+        self.assertEqual(state, {"soundEnabled": True, "soundVolume": 0.65})
 
     def test_chime_pool_is_short_struck_samples_from_the_cluster_recording(self):
         """碰撞音是实录锚点切片出的敲击声，不是 4.8 秒整段录音。"""
