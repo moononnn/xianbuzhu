@@ -20,9 +20,11 @@ import math
 import time
 import random
 import hashlib
+import shutil
 import threading
 import urllib.request
 import urllib.error
+import urllib.parse
 
 try:
     import winsound
@@ -34,7 +36,7 @@ try:
 except ImportError:
     fengling_dsp = None
 
-from PyQt6.QtCore import Qt, QTimer, QPoint, QPointF, QUrl, pyqtSignal
+from PyQt6.QtCore import Qt, QTimer, QPoint, QPointF, QUrl, pyqtSignal, QPropertyAnimation
 from PyQt6.QtGui import (
     QPixmap, QPainter, QPainterPath, QPen, QColor,
     QFont, QFontMetrics, QCursor,
@@ -84,6 +86,11 @@ CLAPPER_SPRING = 20.0  # 铃舌牵引强度：悬停强风下高频撞壁，触�
 CLAPPER_DAMP = 3.2     # 铃舌阻尼：更低，摆动更活跃；冷却+能量门槛仍防噪音化连击
 CHIME_MIN_IMPACT = 7.0  # 铃舌向外撞壁的速度阈值（度/秒），轻碰也响
 CHIME_COOLDOWN = 0.10    # 两次响铃最小间隔：防同一次反弹连击，允许更高响应密度
+# 送达响铃：给铃舌的真实晃动冲量（度/秒）。从静止施加后必然越过铃口限位撞壁，
+# 由撞击触发 _play_chime，音量随撞击力度走（因动而声），不再单独播 WAV。
+# 三次交替 kick 对应三声，力度逐次衰减模拟风铃被风吹动的自然收势。
+DELIVERY_KICK = 200.0
+DELIVERY_RING_WINDOW_S = 2.0  # 送达响铃窗口：期内允许非悬停撞壁发声，其他时间维持原规则
 CHIME_VOICE_COUNT = 6    # 六个播放位置，高密度触发下长切片尾音也不被截断
 CHIME_SLICE_POOL_SIZE = 12  # 启动时从多铃实录切出的碰撞音色数
 VOLUME_LEVELS = (
@@ -103,6 +110,29 @@ C_MINT_DEEP = "#7cbfae"
 C_PINK = "#f2a0b5"
 C_INK = "#6e5a40"       # 深棕字
 C_SUB = "#a08a68"       # 浅棕字
+
+# ── 弹出窗垂直锚点（铃铛中心位于弹出窗高度中的比例，0.5=居中） ──
+PANEL_ANCHOR_RATIO = 0.38   # 左键动作面板：主体在铃铛下方（悬浮球偏好规范）
+MENU_ANCHOR_RATIO = 0.33    # 右键菜单：主体在铃铛下方，与面板视觉呼应
+TARGET_SESSION_LIMIT = 5    # 手动选择只展示最近 5 个对话，避免面板过长
+
+# ── 弹窗鼠标离开自动半透明（与解语花悬浮球同款节奏） ──
+FADE_OUT_OPACITY = 0.60      # 半透明下限：留存在感，鼠标也找得到窗口
+FADE_OUT_DELAY_MS = 450      # 鼠标离开后的宽限，防止快速穿越边缘抖动
+FADE_SHOW_GRACE_MS = 900     # 刚弹出时的缓冲：光标不在窗内也先全显
+FADE_OUT_DURATION_MS = 420   # 淡出渐变时长（慢慢隐退）
+FADE_IN_DURATION_MS = 180    # 恢复渐变时长（回来要快）
+
+# 新心意到达时只发出送达提示音；是否查看心意由用户点击风铃决定。
+
+
+def popup_anchor_y(anchor_rect, popup_height, bounds, anchor_ratio):
+    """垂直锚点：anchor_ratio 是锚点中心在弹出窗高度中的位置（0~1），
+    0.5=垂直居中，>0.5 偏上，<0.5 偏下。返回 clamped 后的 y。"""
+    ay, ah = anchor_rect[1], anchor_rect[3]
+    _, top, _, bottom = bounds
+    y = ay + ah // 2 - int(popup_height * anchor_ratio)
+    return max(top, min(y, bottom - popup_height))
 
 
 def clamp_position(x, y, width, height, left, top, right, bottom, inset=EDGE_INSET):
@@ -235,6 +265,19 @@ def resolve_saved_volume(state):
     return min((level for _label, level in VOLUME_LEVELS), key=lambda level: abs(level - value))
 
 
+def normalize_sound_state(state):
+    """把旧开关/缺省值物化成唯一的四档音量状态，便于其他悬浮球复用。"""
+    volume = resolve_saved_volume(state)
+    enabled = volume > 0
+    changed = (
+        state.get("soundVolume") != volume
+        or state.get("soundEnabled") != enabled
+    )
+    state["soundVolume"] = volume
+    state["soundEnabled"] = enabled
+    return volume, changed
+
+
 def prepare_sound_file(data, volume, cache_dir=AUDIO_CACHE_DIR):
     """把内存 wav 按音量落成缓存文件，供 winsound 真正异步播放。"""
     if fengling_dsp is not None:
@@ -278,28 +321,118 @@ def api_post(path, payload, timeout=12):
 
 
 def load_state():
-    try:
-        if os.path.exists(STATE_PATH):
-            with open(STATE_PATH, "r", encoding="utf-8") as f:
-                return json.load(f)
-    except Exception:
-        pass
+    """读取状态；主文件异常时回退到最近一次成功写入的备份。"""
+    last_error = None
+    for candidate in (STATE_PATH, STATE_PATH + ".tmp", STATE_PATH + ".bak"):
+        try:
+            with open(candidate, "r", encoding="utf-8") as f:
+                state = json.load(f)
+            if not isinstance(state, dict):
+                raise ValueError("状态文件不是对象")
+            return state
+        except FileNotFoundError:
+            continue
+        except Exception as error:
+            last_error = error
+    if last_error is not None:
+        print(f"[风铃] 读取状态失败，使用空状态: {last_error}", file=sys.stderr)
     return {}
 
 
 def save_state(state):
+    """原子保存风铃状态，并保留上一份成功状态供重启回退。"""
+    temp_path = STATE_PATH + ".tmp"
     try:
         os.makedirs(os.path.dirname(STATE_PATH), exist_ok=True)
-        with open(STATE_PATH, "w", encoding="utf-8") as f:
+        with open(temp_path, "w", encoding="utf-8") as f:
             json.dump(state, f, ensure_ascii=False)
-    except Exception:
-        pass
+            f.flush()
+            os.fsync(f.fileno())
+        if os.path.exists(STATE_PATH):
+            try:
+                shutil.copyfile(STATE_PATH, STATE_PATH + ".bak")
+            except Exception:
+                pass
+        os.replace(temp_path, STATE_PATH)
+        return True
+    except Exception as error:
+        print(f"[风铃] 保存状态失败: {error}", file=sys.stderr)
+        try:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+        except Exception:
+            pass
+        return False
+
+
+def pending_heart_items(hearts, dismissed_ids=None):
+    """返回仍应由风铃保留的未读心意，顺序沿用代理返回的最新→最旧。"""
+    dismissed = {str(item) for item in (dismissed_ids or set())}
+    pending = []
+    for item in hearts or []:
+        heart_id = str(item.get("id") or "")
+        if not heart_id or heart_id in dismissed:
+            continue
+        if str(item.get("status") or "").lower() != "unread":
+            continue
+        if item.get("bellDismissedAt"):
+            continue
+        pending.append(item)
+    return pending
+
+
+def resolve_heart_poll(seen_ids, hearts, seeded):
+    """把轮询结果折成：本轮新送达、应确认 ID、更新后的进程去重集合。"""
+    seen = set(seen_ids or set())
+    items = [item for item in (hearts or []) if item.get("id")]
+    ids = [str(item["id"]) for item in items]
+    eligible = pending_heart_items(items)
+    if not seeded:
+        # 首次启动只为尚未送达的未读心意响铃；已送达但未读的仍留给手动面板查看。
+        fresh = [item for item in eligible if not item.get("deliveredAt")]
+        seen.update(ids)
+        fresh_ids = [str(item["id"]) for item in fresh]
+        return seen, fresh, fresh_ids, True
+    unseen = [item for item in eligible if str(item["id"]) not in seen]
+    # 已送达但仍未读的心意进入待查看队列，不重复播放送达提示。
+    fresh = [item for item in unseen if not item.get("deliveredAt")]
+    seen.update(str(item["id"]) for item in items if item.get("id"))
+    fresh_ids = [str(item["id"]) for item in fresh]
+    return seen, fresh, fresh_ids, True
+
+
+def heart_popup_title(heart):
+    """把心意折成风铃弹窗里的一句短提示。"""
+    partner = str(heart.get("partnerName") or "有人")
+    gift = heart.get("gift") or {}
+    name = str(gift.get("name") or "一份小礼物")
+    action = "留了" if heart.get("eventType") == "scene" else "送了"
+    return f"{partner}给你{action}{name}"
+
+
+def resolve_current_heart(current_heart, hearts, clear_if_missing=True):
+    """主页面确认后，风铃下一次同步时清掉对应的心意卡。"""
+    if not current_heart:
+        return None
+    current_id = str(current_heart.get("id") or "")
+    if not current_id:
+        return None
+    for item in hearts or []:
+        if str(item.get("id") or "") != current_id:
+            continue
+        if str(item.get("status") or "").lower() == "read":
+            return None
+        return item
+    # 菜单打开时的并行快照可能早于心意入库，不能让旧快照误删刚弹出的卡片。
+    return None if clear_if_missing else current_heart
 
 
 # ─────────────────────────────
 #  悬浮球本体
 # ─────────────────────────────
 class FenglingBall(QWidget):
+    heart_ready = pyqtSignal(object)
+
     def __init__(self):
         super().__init__(None)
         self.setWindowFlags(
@@ -315,7 +448,12 @@ class FenglingBall(QWidget):
         # 状态
         self.state = load_state()
         self.catalog = None          # 礼物/互动/恶作剧清单 + 光粒
-        self.target = None           # 当前最活跃的 Hana 会话目标
+        self.target = None           # 当前目标会话
+        self.target_mode = "auto"    # auto=自动判断 / pinned=固定某段对话
+        self.pinned_target = None    # {agentId, sessionPath, title} 或 None
+        self.current_heart = None    # 待用户点击查看的当前心意
+        self.heart_queue = []        # 服务端未读且未收起的心意，最新在前
+        self._heart_dismissed_ids = set()  # 请求落盘前的本进程乐观抑制
 
         # 动画：两个有重量的摆。铃身先受风，短册受牵引后再追上。
         self.t = 0.0
@@ -330,8 +468,11 @@ class FenglingBall(QWidget):
         self.hover_strength = 1.0
         self.gust = 0.0
         self.gust_direction = 1.0
-        self.sound_volume = resolve_saved_volume(self.state)
+        self.sound_volume, sound_state_changed = normalize_sound_state(self.state)
+        if sound_state_changed:
+            save_state(self.state)
         self._sound_cooldown = 0.0
+        self._delivery_ring_until = 0.0  # 送达响铃窗口截止（monotonic 秒）；期内撞壁允许非悬停发声
         self._chime_pool = []
         self._last_chime_idx = -1
         self._sound_voices = []
@@ -339,6 +480,11 @@ class FenglingBall(QWidget):
         self._init_chime_pool()
         self._init_sound_voices()
         self.menu = None
+        self._heart_poll_elapsed = 5.0
+        self._heart_polling = False
+        self._heart_seeded = False
+        self._heart_seen_ids = set()
+        self.heart_ready.connect(self._apply_heart_poll)
 
         self._drag = None
         self._press_global = None
@@ -454,6 +600,12 @@ class FenglingBall(QWidget):
             self._screen_check_elapsed = 0.0
             self._ensure_visible(save=True)
 
+        # 主动心意只轮询信箱，不在风铃里做回复；新心意到达时四下短摆并叮三声。
+        self._heart_poll_elapsed += dt
+        if self._heart_poll_elapsed >= 5.0:
+            self._heart_poll_elapsed = 0.0
+            self._poll_hearts_async()
+
         # 透明异形窗口在 Windows 下可能漏掉 enter/leave 事件。
         # 每帧读取全局光标，按稳定的宽松区域判定，保证悬停一定能触发。
         cursor_global = QCursor.pos()
@@ -564,10 +716,140 @@ class FenglingBall(QWidget):
             self.velocity_clapper,
         )
         self._sound_cooldown = max(0.0, self._sound_cooldown - dt)
-        if should_attempt_chime(impact, self.hovered, self._sound_cooldown):
+        # 送达响铃窗口内允许非悬停撞壁发声（铃舌由真实冲量驱动，因动而声）；
+        # 窗口外维持原规则：悬停气流才响。
+        chime_hovered = self.hovered
+        in_delivery_window = time.monotonic() < self._delivery_ring_until
+        if in_delivery_window:
+            chime_hovered = True
+        if should_attempt_chime(impact, chime_hovered, self._sound_cooldown):
             self._play_chime(impact)
         self.update()
 
+    def _poll_hearts_async(self):
+        if self._heart_polling:
+            return
+        self._heart_polling = True
+
+        def worker():
+            payload = {"ok": False, "hearts": [], "new_hearts": [], "ack_ids": [], "seen_ids": [], "seeded": self._heart_seeded}
+            try:
+                data = api_get("/hearts", timeout=3)
+                if data.get("ok"):
+                    hearts = data.get("hearts") or []
+                    seen, fresh, ack_ids, seeded = resolve_heart_poll(
+                        self._heart_seen_ids,
+                        hearts,
+                        self._heart_seeded,
+                    )
+                    payload["hearts"] = hearts
+                    payload["new_hearts"] = fresh
+                    payload["ack_ids"] = ack_ids
+                    payload["seen_ids"] = list(seen)
+                    payload["seeded"] = seeded
+                    payload["ok"] = True
+            except Exception:
+                pass
+            try:
+                self.heart_ready.emit(payload)
+            except RuntimeError:
+                pass
+
+        threading.Thread(target=worker, daemon=True, name="fengling-hearts").start()
+
+    def _apply_heart_poll(self, payload):
+        self._heart_polling = False
+        if not payload.get("ok"):
+            return
+        self._heart_seen_ids = set(payload.get("seen_ids") or self._heart_seen_ids)
+        self._heart_seeded = bool(payload.get("seeded", self._heart_seeded))
+
+        menu_visible = bool(self.menu and self.menu.isVisible())
+        if "hearts" in payload:
+            hearts = payload.get("hearts") or []
+            self.heart_queue = pending_heart_items(hearts, self._heart_dismissed_ids)
+            current_id = str(self.current_heart.get("id") or "") if self.current_heart else ""
+            current = next(
+                (item for item in self.heart_queue if str(item.get("id") or "") == current_id),
+                None,
+            )
+            if current is not None:
+                self.current_heart = current
+            elif current_id:
+                self.current_heart = None
+
+            # 面板未打开时始终准备最新一份；面板已打开且用户刚点过“先收着”时，
+            # 不把队列里的下一份立刻打回脸上，保持非打断式语义。
+            if self.heart_queue and not self.current_heart and not (
+                menu_visible and self.menu._heart_card_dismissed
+            ):
+                self.current_heart = self.heart_queue[0]
+            elif self.heart_queue and not menu_visible:
+                self.current_heart = self.heart_queue[0]
+
+            if menu_visible:
+                self.menu._update_heart_card()
+                self.menu.keep_current_position(full_height=True)
+
+        ack_ids = payload.get("ack_ids") or []
+        fresh = payload.get("new_hearts") or []
+        if not fresh:
+            # 已送达但仍未读的心意留在 heart_queue，等用户手动打开查看；不重复响铃。
+            if ack_ids:
+                self._ack_hearts_async(ack_ids)
+            return
+
+        # 一轮可能收到多份新心意：只播放一次送达提示，队列全部保留，面板优先展示最新一份。
+        self.current_heart = self.heart_queue[0] if self.heart_queue else fresh[0]
+        if menu_visible:
+            self.menu._heart_card_dismissed = False
+            self.menu._update_heart_card()
+            self.menu.keep_current_position(full_height=True)
+        if ack_ids:
+            self._ack_hearts_async(ack_ids)
+        self._swing_for_delivery()
+
+
+    def _ack_hearts_async(self, ids):
+        if not ids:
+            return
+
+        def worker():
+            try:
+                api_post("/hearts/ack", {"ids": ids}, timeout=3)
+            except Exception:
+                pass
+
+        threading.Thread(target=worker, daemon=True, name="fengling-heart-ack").start()
+
+    def _dismiss_hearts_async(self, ids):
+        if not ids:
+            return
+
+        def worker():
+            try:
+                api_post("/hearts/dismiss", {"ids": ids}, timeout=3)
+            except Exception:
+                pass
+
+        threading.Thread(target=worker, daemon=True, name="fengling-heart-dismiss").start()
+
+    def _swing_for_delivery(self):
+        """心意到达：给铃舌真实的晃动冲量，让它撞壁自然发声（因动而声）。
+
+        三次交替 kick 对应三声，力度逐次略减模拟风被吹动的自然收势；
+        撞击本身触发 _play_chime，音量随撞击力度走，不再单独播 WAV。
+        静音档位下仍会晃（视觉反馈在），只是不发声。
+        """
+        self._delivery_ring_until = time.monotonic() + DELIVERY_RING_WINDOW_S
+        kicks = (DELIVERY_KICK, -DELIVERY_KICK * 0.82, DELIVERY_KICK * 0.66)
+        for delay, strength in zip((0, 260, 520), kicks):
+            QTimer.singleShot(delay, lambda s=strength: self._delivery_kick(s))
+
+    def _delivery_kick(self, strength):
+        # 清冷却保证本次撞击一定发声；冲量直接作用在铃舌速度上，由物理撞壁触发声音。
+        self._sound_cooldown = 0.0
+        self.velocity_clapper += strength
     # ── 绘制（去圆底，仅铃 + 纸条；纸条画在铃身变换内，跟随铃口） ──
     def paintEvent(self, _e):
         p = QPainter(self)
@@ -722,7 +1004,7 @@ class FenglingBall(QWidget):
     def _open_context_menu(self, global_pos):
         if self.menu and self.menu.isVisible():
             self.menu.close_menu()
-        menu = QMenu(self)
+        menu = FenglingContextMenu(self)
         menu.setStyleSheet(f"""
             QMenu {{
                 background: {C_BG}; color: {C_INK};
@@ -732,7 +1014,9 @@ class FenglingBall(QWidget):
             QMenu::item {{ padding: 7px 18px; border-radius: 7px; }}
             QMenu::item:selected {{ background: #f1e3c8; }}
         """)
-        volume_menu = menu.addMenu("声音大小")
+        volume_menu = FenglingContextMenu(menu)
+        volume_menu.setTitle("声音大小")
+        menu.addMenu(volume_menu)
         for label, volume in VOLUME_LEVELS:
             action = volume_menu.addAction(label)
             action.setCheckable(True)
@@ -743,7 +1027,20 @@ class FenglingBall(QWidget):
         menu.addSeparator()
         close_action = menu.addAction("关闭风铃")
         close_action.triggered.connect(QApplication.instance().quit)
-        menu.exec(global_pos)
+        # 位置锚定：右侧优先放不下翻左，垂直按铃铛中心 33% 锚定（主体在铃铛下方）
+        menu_size = menu.sizeHint()
+        screen = self.screen() or QApplication.primaryScreen()
+        geo = screen.availableGeometry()
+        x = self.x() + self.width() + 8
+        if x + menu_size.width() > geo.right():
+            x = self.x() - menu_size.width() - 8
+        y = popup_anchor_y(
+            (self.x(), self.y(), self.width(), self.height()),
+            menu_size.height(),
+            (geo.left(), geo.top(), geo.right() + 1, geo.bottom() + 1),
+            MENU_ANCHOR_RATIO,
+        )
+        menu.exec(QPoint(x, y))
 
     def _set_hovered(self, value, direction=None, strength=None):
         value = bool(value)
@@ -805,25 +1102,386 @@ class FenglingBall(QWidget):
     def _open_menu(self):
         if self.menu is None:
             self.menu = FenglingMenu(self)
-        self.menu.prepare_for_show()
-        self.menu.move_to_ball()
-        self.menu.show()
+        already_visible = self.menu.isVisible()
+        if already_visible:
+            # 新心意到达时只更新卡片，不重置用户已经拖好的面板位置和当前分页。
+            self.menu._heart_card_dismissed = False
+            self.menu._update_heart_card()
+            self.menu.keep_current_position(full_height=True)
+        else:
+            self.menu.prepare_for_show()
+            self.menu.move_to_ball()
+            self.menu.show()
+            self.menu.activateWindow()
         self.menu.raise_()
-        self.menu.activateWindow()
         self.menu.refresh_async()
 
     def _do_visit(self, vtype, item_id):
-        # 目标由插件端在点击瞬间重新判定，悬浮球不保存也不接受手动选择。
+        # 动作只提交物品；目标选择器先通过 /pin 固定目标，代理再在点击瞬间
+        # 读取当前 auto/pinned 目标并校验 sessionPath，避免客户端自行伪造助手路径。
         # 恶作剧包含模型生成与会话忙碌重试，给它更完整的等待窗口，避免服务端已执行却被前端误报失败。
         timeout = 55 if vtype == "prank" else 20
         return api_post("/visit", {"type": vtype, "itemId": item_id}, timeout=timeout)
 
 
 # ─────────────────────────────
+#  弹窗鼠标离开自动半透明（左右菜单共用）
+# ─────────────────────────────
+class FadeOnLeaveMixin:
+    def _setup_fade_on_leave(self):
+        self._fade_out_timer = QTimer(self)
+        self._fade_out_timer.setSingleShot(True)
+        self._fade_out_timer.timeout.connect(self._begin_fade_out)
+        self._fade_anim = QPropertyAnimation(self, b"windowOpacity", self)
+
+    def _reset_fade_on_show(self):
+        """显示时恢复实体；光标在窗外则给一小段缓冲后淡出。"""
+        self.setWindowOpacity(1.0)
+        self._fade_out_timer.stop()
+        self._fade_anim.stop()
+        if not self._cursor_inside():
+            self._fade_out_timer.start(FADE_OUT_DELAY_MS + FADE_SHOW_GRACE_MS)
+
+    def _on_fade_enter(self):
+        self._fade_out_timer.stop()
+        self._fade_to(1.0, FADE_IN_DURATION_MS)
+
+    def _on_fade_leave(self):
+        self._fade_out_timer.start(FADE_OUT_DELAY_MS)
+
+    def _cancel_fade(self):
+        self._fade_out_timer.stop()
+        self._fade_anim.stop()
+
+    def _cursor_inside(self):
+        return self.rect().contains(self.mapFromGlobal(QCursor.pos()))
+
+    def _begin_fade_out(self):
+        self._fade_to(FADE_OUT_OPACITY, FADE_OUT_DURATION_MS)
+
+    def _fade_to(self, target, duration_ms):
+        self._fade_anim.stop()
+        self._fade_anim.setStartValue(self.windowOpacity())
+        self._fade_anim.setEndValue(target)
+        self._fade_anim.setDuration(duration_ms)
+        self._fade_anim.start()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._reset_fade_on_show()
+
+    def hideEvent(self, event):
+        self._cancel_fade()
+        super().hideEvent(event)
+
+    def enterEvent(self, event):
+        super().enterEvent(event)
+        self._on_fade_enter()
+
+    def leaveEvent(self, event):
+        super().leaveEvent(event)
+        self._on_fade_leave()
+
+
+class FenglingContextMenu(FadeOnLeaveMixin, QMenu):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._setup_fade_on_leave()
+
+
+# ─────────────────────────────
+#  目标会话选择面板
+# ─────────────────────────────
+class TargetMenu(QFrame):
+    """自动判断 / 先按助手再选对话；固定结果写入插件数据。"""
+
+    data_ready = pyqtSignal(object)
+
+    def __init__(self, panel):
+        super().__init__(panel)
+        self.panel = panel
+        self.ball = panel.ball
+        self.view_mode = "auto"
+        self.selected_agent_id = ""
+        self.agents = []
+        self.sessions = []
+        self.loading = False
+        self.error = ""
+        self._request_seq = 0
+        self.data_ready.connect(self._apply_data)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setObjectName("targetMenu")
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self._build()
+
+    def _build(self):
+        root = QVBoxLayout(self)
+        root.setContentsMargins(10, 9, 10, 9)
+        root.setSpacing(6)
+
+        title = QLabel("这次动作发到哪段对话？")
+        title.setObjectName("targetMenuTitle")
+        root.addWidget(title)
+
+        mode_row = QHBoxLayout()
+        mode_row.setSpacing(6)
+        self.btn_auto = QPushButton("自动判断")
+        self.btn_auto.setObjectName("targetMode")
+        self.btn_auto.clicked.connect(self._pick_auto)
+        mode_row.addWidget(self.btn_auto)
+        self.btn_manual = QPushButton("自己选择")
+        self.btn_manual.setObjectName("targetMode")
+        self.btn_manual.clicked.connect(self._show_manual)
+        mode_row.addWidget(self.btn_manual)
+        root.addLayout(mode_row)
+
+        self.lbl_hint = QLabel("")
+        self.lbl_hint.setObjectName("targetMenuHint")
+        self.lbl_hint.setWordWrap(True)
+        root.addWidget(self.lbl_hint)
+
+        self.btn_back = QPushButton("← 换助手")
+        self.btn_back.setObjectName("targetBack")
+        self.btn_back.clicked.connect(self._show_agents)
+        root.addWidget(self.btn_back)
+
+        self.list_host = QWidget(self)
+        self.list_box = QVBoxLayout(self.list_host)
+        self.list_box.setContentsMargins(0, 0, 0, 0)
+        self.list_box.setSpacing(5)
+        root.addWidget(self.list_host)
+        self.apply_theme()
+
+    def apply_theme(self):
+        self.setStyleSheet(f"""
+            #targetMenu {{ background: #fffaf0; border: 1px solid #ead9bb; border-radius: 14px; }}
+            QLabel {{ background: transparent; color: {C_INK}; }}
+            QLabel#targetMenuTitle {{ color: {C_GOLD_DEEP}; font-size: 12px; font-weight: 700; }}
+            QLabel#targetMenuHint {{ color: {C_SUB}; font-size: 10px; padding-bottom: 1px; }}
+            QPushButton#targetMode, QPushButton#targetBack {{
+                min-height: 28px; padding: 0 8px; color: {C_SUB}; background: #fffdf8;
+                border: 1px solid #ead9bb; border-radius: 9px; font-size: 11px;
+            }}
+            QPushButton#targetMode:hover, QPushButton#targetBack:hover {{
+                color: {C_GOLD_DEEP}; background: #f6ecd9; border-color: {C_GOLD};
+            }}
+            QPushButton#targetMode[active="true"] {{
+                color: #46695f; background: {C_MINT}; border-color: {C_MINT_DEEP}; font-weight: 600;
+            }}
+            QPushButton#targetItem {{
+                min-height: 30px; max-height: 30px; text-align: left; padding: 0 9px;
+                color: {C_INK}; background: #fffdf8; border: 1px solid #ead9bb;
+                border-radius: 9px; font-size: 11px;
+            }}
+            QPushButton#targetItem:hover {{ background: #f6ecd9; border-color: {C_GOLD}; }}
+            QPushButton#targetItem[active="true"] {{ color: {C_GOLD_DEEP}; background: #f5ead5; border-color: {C_GOLD}; }}
+        """)
+        self._sync_ui()
+
+    def _clear_list(self):
+        while self.list_box.count():
+            item = self.list_box.takeAt(0)
+            widget = item.widget()
+            if widget:
+                widget.hide()
+                widget.setParent(None)
+                widget.deleteLater()
+
+    def _set_active(self, button, active):
+        button.setProperty("active", "true" if active else "false")
+        button.style().unpolish(button)
+        button.style().polish(button)
+
+    def _sync_ui(self):
+        manual = self.view_mode == "manual"
+        self._set_active(self.btn_auto, not manual)
+        self._set_active(self.btn_manual, manual)
+        self.btn_back.setVisible(manual and bool(self.selected_agent_id))
+        self._clear_list()
+
+        if not manual:
+            self.lbl_hint.setText("每次点击时自动判断最近活跃的对话")
+            return
+        if self.selected_agent_id:
+            agent_name = next(
+                (item.get("name") for item in self.agents if item.get("id") == self.selected_agent_id),
+                self.selected_agent_id,
+            )
+            self.lbl_hint.setText(f"选择 {agent_name} 最近的 {TARGET_SESSION_LIMIT} 个活跃对话")
+        else:
+            self.lbl_hint.setText("先选一位助手，再从她最近的对话里挑一段")
+
+        if self.loading:
+            self._add_hint("正在读取对话列表…")
+            return
+        if self.error:
+            self._add_hint(self.error)
+            return
+        if not self.selected_agent_id:
+            if not self.agents:
+                self._add_hint("还没读取到可选助手")
+                return
+            for agent in self.agents:
+                agent_id = agent.get("id") or ""
+                if not agent_id:
+                    continue
+                button = QPushButton(agent.get("name") or agent_id)
+                button.setObjectName("targetItem")
+                button.setCursor(Qt.CursorShape.PointingHandCursor)
+                button.clicked.connect(lambda _=False, aid=agent_id: self._pick_agent(aid))
+                self.list_box.addWidget(button)
+            return
+        if not self.sessions:
+            self._add_hint("还没读取到可选对话")
+            return
+        for session in self.sessions[:TARGET_SESSION_LIMIT]:
+            title = (session.get("title") or "未命名对话").strip()
+            agent_name = session.get("agentName") or session.get("agentId") or "未命名助手"
+            stamp = session.get("lastUserTime") or 0
+            when = time.strftime("%H:%M", time.localtime(stamp / 1000)) if stamp else ""
+            meta = f"{agent_name} · {when}" if when else agent_name
+            button = QPushButton()
+            button.setObjectName("targetItem")
+            button.setText(button.fontMetrics().elidedText(title, Qt.TextElideMode.ElideRight, 244))
+            button.setToolTip(f"{title}\n{meta}")
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+            button.setProperty(
+                "active",
+                "true" if self.ball.pinned_target and self.ball.pinned_target.get("sessionPath") == session.get("sessionPath") else "false",
+            )
+            button.clicked.connect(lambda _=False, item=session: self._pick(item))
+            self.list_box.addWidget(button)
+
+    def _add_hint(self, text):
+        label = QLabel(text)
+        label.setObjectName("targetMenuHint")
+        label.setWordWrap(True)
+        self.list_box.addWidget(label)
+
+    def invalidate_pending(self):
+        """面板收起时使旧的后台列表回包失效，避免重开时串入旧状态。"""
+        self._request_seq += 1
+
+    def _show_manual(self):
+        self._show_agents()
+
+    def _show_agents(self):
+        self.view_mode = "manual"
+        self.selected_agent_id = ""
+        self.agents = []
+        self.sessions = []
+        self._sync_ui()
+        self.refresh_async()
+        self.panel._resize_after_target_change()
+
+    def _pick_agent(self, agent_id):
+        self.selected_agent_id = agent_id
+        self.sessions = []
+        self.refresh_async()
+        self.panel._resize_after_target_change()
+
+    def _pick_auto(self):
+        self._request_seq += 1
+        self.panel.invalidate_target_sync()
+        try:
+            result = api_post("/pin", {}, timeout=5)
+            if not result.get("ok"):
+                raise RuntimeError(result.get("error") or "切换失败")
+        except Exception:
+            self.error = "切换失败，稍后再试"
+            self._sync_ui()
+            self.panel._flash("切换失败，原来的选择没有改变")
+            return
+        self.view_mode = "auto"
+        self.ball.target_mode = "auto"
+        self.ball.pinned_target = None
+        self.panel._sync_target_state()
+        self.panel._flash("已改为自动判断活跃窗口 ✓")
+        self.panel._set_target_selector_visible(False)
+
+    def _pick(self, session):
+        self._request_seq += 1
+        self.panel.invalidate_target_sync()
+        try:
+            result = api_post("/pin", {
+                "sessionPath": session.get("sessionPath") or "",
+                "agentId": session.get("agentId") or "",
+                "title": session.get("title") or "",
+            }, timeout=5)
+            if not result.get("ok"):
+                raise RuntimeError(result.get("error") or "固定失败")
+        except Exception:
+            self.error = "固定失败，原来的选择没有改变"
+            self._sync_ui()
+            self.panel._flash("固定失败，原来的选择没有改变")
+            return
+        self.view_mode = "manual"
+        self.ball.target_mode = "pinned"
+        self.ball.pinned_target = {
+            "agentId": session.get("agentId") or "",
+            "sessionPath": session.get("sessionPath") or "",
+            "title": session.get("title") or "",
+        }
+        self.ball.target = {
+            "id": session.get("agentId") or "",
+            "agentId": session.get("agentId") or "",
+            "name": session.get("agentName") or session.get("agentId") or "",
+            "title": session.get("title") or "",
+            "sessionPath": session.get("sessionPath") or "",
+        }
+        self.panel._update_target_label()
+        self.panel._flash("已固定这段对话 ✓")
+        self.panel._set_target_selector_visible(False)
+
+    def refresh_async(self):
+        self._request_seq += 1
+        request_seq = self._request_seq
+        self.loading = True
+        self.error = ""
+        self._sync_ui()
+
+        def worker():
+            payload = {"seq": request_seq, "agents": [], "sessions": [], "error": "读取失败，关闭后重开再试"}
+            try:
+                if self.view_mode == "manual" and not self.selected_agent_id:
+                    data = api_get("/agents", timeout=5)
+                    if data.get("ok"):
+                        payload = {"seq": request_seq, "agents": data.get("agents") or [], "sessions": [], "error": ""}
+                else:
+                    query = ""
+                    if self.view_mode == "manual" and self.selected_agent_id:
+                        query = "?agentId=" + urllib.parse.quote(self.selected_agent_id, safe="")
+                    data = api_get("/sessions" + query, timeout=5)
+                    if data.get("ok"):
+                        payload = {"seq": request_seq, "agents": [], "sessions": data.get("sessions") or [], "error": ""}
+            except Exception:
+                pass
+            try:
+                self.data_ready.emit(payload)
+            except RuntimeError:
+                pass
+
+        threading.Thread(target=worker, daemon=True, name="fengling-target-list").start()
+
+    def _apply_data(self, payload):
+        if payload.get("seq") != self._request_seq:
+            return
+        self.loading = False
+        self.error = payload.get("error") or ""
+        if self.view_mode == "manual" and not self.selected_agent_id:
+            self.agents = payload.get("agents") or []
+        else:
+            self.sessions = (payload.get("sessions") or [])[:TARGET_SESSION_LIMIT]
+        self._sync_ui()
+        self.panel._resize_after_target_change()
+
+
+# ─────────────────────────────
 #  动作菜单面板
 # ─────────────────────────────
-class FenglingMenu(QFrame):
+class FenglingMenu(FadeOnLeaveMixin, QFrame):
     refresh_ready = pyqtSignal(object)
+    target_state_ready = pyqtSignal(object)
 
     def __init__(self, ball):
         super().__init__(None)
@@ -837,12 +1495,18 @@ class FenglingMenu(QFrame):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setObjectName("panel")
-        self.setFixedWidth(238)
+        self.setFixedWidth(286)
         self.active_kind = "interact"
+        self._heart_card_dismissed = False
         self._actions_signature = None
         self._refreshing = False
+        self._target_seq = 0
+        self._needs_reanchor = False  # 本次打开后内容尚未以完整高度锚定过
+        self._user_dragged = False    # 本次打开后用户是否手动拖过面板（拖过则尊重手动位置）
         self.refresh_ready.connect(self._apply_async_refresh)
+        self.target_state_ready.connect(self._apply_target_state)
         self._build_ui()
+        self._setup_fade_on_leave()
         self.target_timer = QTimer(self)
         self.target_timer.setInterval(10000)
         self.target_timer.timeout.connect(self.refresh_async)
@@ -863,6 +1527,24 @@ class FenglingMenu(QFrame):
                 border-radius: 10px; padding: 7px 10px;
                 font-size: 13px; font-weight: 600;
             }}
+            QPushButton#targetButton {{
+                color: {C_SUB}; background: #fffdf8; border: 1px solid #ead9bb;
+                border-radius: 10px; padding: 7px 9px; font-size: 11px;
+            }}
+            QPushButton#targetButton:hover {{ background: #f6ecd9; border-color: {C_GOLD}; color: {C_GOLD_DEEP}; }}
+            QFrame#heartCard {{
+                background: #fff4f0; border: 1px solid #e9bdc4;
+                border-radius: 12px;
+            }}
+            QLabel#heartTitle {{ color: {C_GOLD_DEEP}; font-size: 12px; font-weight: 600; }}
+            QLabel#heartGift {{ color: {C_INK}; font-size: 14px; font-weight: 600; }}
+            QLabel#heartMessage {{ color: {C_INK}; font-size: 12px; line-height: 1.4; }}
+            QLabel#heartHint {{ color: {C_SUB}; font-size: 11px; line-height: 1.35; }}
+            QPushButton#heartKeep {{
+                background: #fffdf8; border: 1px solid #ead9bb;
+                border-radius: 9px; padding: 6px 10px; color: {C_SUB};
+            }}
+            QPushButton#heartKeep:hover {{ background: #f6ecd9; }}
             QLabel#sub {{ color: {C_SUB}; font-size: 12px; }}
             QLabel#feedback {{
                 color: {C_INK}; font-size: 12px; font-weight: 600;
@@ -901,10 +1583,54 @@ class FenglingMenu(QFrame):
         root.setContentsMargins(13, 12, 13, 11)
         root.setSpacing(8)
 
-        # 目标只读展示；目标由插件端按当前最活跃会话自动刷新。
+        # 当前心意直接放进普通风铃面板；不做历史列表，只展示这一份正在处理的心意。
+        self.heart_card = QFrame()
+        self.heart_card.setObjectName("heartCard")
+        heart_root = QVBoxLayout(self.heart_card)
+        heart_root.setContentsMargins(10, 9, 10, 9)
+        heart_root.setSpacing(5)
+        self.lbl_heart_title = QLabel("有人悄悄给你带了点东西")
+        self.lbl_heart_title.setObjectName("heartTitle")
+        self.lbl_heart_gift = QLabel("")
+        self.lbl_heart_gift.setObjectName("heartGift")
+        self.lbl_heart_gift.setTextFormat(Qt.TextFormat.PlainText)
+        self.lbl_heart_message = QLabel("")
+        self.lbl_heart_message.setObjectName("heartMessage")
+        self.lbl_heart_message.setWordWrap(True)
+        self.lbl_heart_message.setTextFormat(Qt.TextFormat.PlainText)
+        self.lbl_heart_hint = QLabel("")
+        self.lbl_heart_hint.setObjectName("heartHint")
+        self.lbl_heart_hint.setWordWrap(True)
+        self.lbl_heart_hint.setTextFormat(Qt.TextFormat.PlainText)
+        heart_root.addWidget(self.lbl_heart_title)
+        heart_root.addWidget(self.lbl_heart_gift)
+        heart_root.addWidget(self.lbl_heart_message)
+        heart_root.addWidget(self.lbl_heart_hint)
+        heart_buttons = QHBoxLayout()
+        heart_buttons.setSpacing(6)
+        self.btn_heart_keep = QPushButton("先收着")
+        self.btn_heart_keep.setObjectName("heartKeep")
+        heart_buttons.addWidget(self.btn_heart_keep)
+        heart_root.addLayout(heart_buttons)
+        self.heart_card.hide()
+        root.addWidget(self.heart_card)
+
+        # 当前目标展示；点右侧按钮打开自动 / 手动选择面板。
+        target_row = QHBoxLayout()
+        target_row.setSpacing(6)
         self.lbl_target = QLabel("跟随当前对话 · 正在读取")
         self.lbl_target.setObjectName("target")
-        root.addWidget(self.lbl_target)
+        target_row.addWidget(self.lbl_target, 1)
+        self.btn_target = QPushButton("选择对话 ▾")
+        self.btn_target.setObjectName("targetButton")
+        self.btn_target.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_target.clicked.connect(self._toggle_target_menu)
+        target_row.addWidget(self.btn_target)
+        root.addLayout(target_row)
+
+        self.target_menu = TargetMenu(self)
+        self.target_menu.hide()
+        root.addWidget(self.target_menu)
 
         # 左键菜单只留两个直觉入口：互动、送礼。
         tabs = QHBoxLayout()
@@ -933,13 +1659,24 @@ class FenglingMenu(QFrame):
 
         self.btn_interact.clicked.connect(lambda: self._render_actions("interact"))
         self.btn_gift.clicked.connect(lambda: self._render_actions("gift"))
+        self.btn_heart_keep.clicked.connect(self._hide_current_heart)
 
     # ── 先显示缓存，再后台刷新，打开面板不被网络请求卡住 ──
     def prepare_for_show(self):
+        self._needs_reanchor = True
+        self._user_dragged = False
+        self._heart_card_dismissed = False
+        self.active_kind = "interact"
+        self.target_menu.invalidate_pending()
+        self.target_menu.hide()
         self._flash("")
+        if self.ball.current_heart is None and getattr(self.ball, "heart_queue", None):
+            self.ball.current_heart = self.ball.heart_queue[0]
+        self._update_heart_card()
         self._update_target_label()
         self._render_actions(self.active_kind)
         self._update_jar()
+        self._reset_fade_on_show()
 
     def refresh_async(self):
         if self._refreshing:
@@ -947,7 +1684,17 @@ class FenglingMenu(QFrame):
         self._refreshing = True
 
         def worker():
-            payload = {"catalog": None, "targetLoaded": False, "target": None}
+            target_seq = self._target_seq
+            payload = {
+                "catalog": None,
+                "targetLoaded": False,
+                "target": None,
+                "target_mode": "auto",
+                "pinned_target": None,
+                "targetStateLoaded": False,
+                "target_seq": target_seq,
+                "hearts": None,
+            }
             try:
                 data = api_get("/catalog", timeout=4)
                 if data.get("ok"):
@@ -959,6 +1706,15 @@ class FenglingMenu(QFrame):
                 if data.get("ok"):
                     payload["targetLoaded"] = True
                     payload["target"] = data.get("target")
+                    payload["target_mode"] = data.get("mode") or "auto"
+                    payload["pinned_target"] = data.get("pinned")
+                    payload["targetStateLoaded"] = True
+            except Exception:
+                pass
+            try:
+                data = api_get("/hearts", timeout=4)
+                if data.get("ok"):
+                    payload["hearts"] = data.get("hearts") or []
             except Exception:
                 pass
             try:
@@ -973,8 +1729,30 @@ class FenglingMenu(QFrame):
         catalog = payload.get("catalog")
         if catalog is not None:
             self.ball.catalog = catalog
-        if payload.get("targetLoaded"):
+        if payload.get("targetLoaded") and payload.get("target_seq") == self._target_seq:
             self.ball.target = payload.get("target")
+            if payload.get("targetStateLoaded"):
+                self.ball.target_mode = "pinned" if payload.get("target_mode") == "pinned" else "auto"
+                self.ball.pinned_target = payload.get("pinned_target")
+        if payload.get("hearts") is not None:
+            hearts = payload.get("hearts") or []
+            self.ball.heart_queue = pending_heart_items(
+                hearts,
+                getattr(self.ball, "_heart_dismissed_ids", set()),
+            )
+            current_id = str(self.ball.current_heart.get("id") or "") if self.ball.current_heart else ""
+            current = next(
+                (item for item in self.ball.heart_queue if str(item.get("id") or "") == current_id),
+                None,
+            )
+            if current is not None:
+                self.ball.current_heart = current
+            elif current_id:
+                self.ball.current_heart = None
+            if not self.ball.current_heart and self.ball.heart_queue and not self._heart_card_dismissed:
+                self.ball.current_heart = self.ball.heart_queue[0]
+            self._update_heart_card()
+            self.keep_current_position(full_height=True)
         self._update_target_label()
         self._render_actions(self.active_kind)
         self._update_jar()
@@ -995,13 +1773,134 @@ class FenglingMenu(QFrame):
     def _refresh_target(self):
         try:
             data = api_get("/target", timeout=4)
-            self.ball.target = data.get("target") if data.get("ok") else None
+            if data.get("ok"):
+                self.ball.target = data.get("target")
+                self.ball.target_mode = "pinned" if data.get("mode") == "pinned" else "auto"
+                self.ball.pinned_target = data.get("pinned")
+            else:
+                self.ball.target = None
         except Exception:
             self.ball.target = None
         self._update_target_label()
 
+    def _toggle_target_menu(self):
+        visible = not self.target_menu.isVisible()
+        self._set_target_selector_visible(visible)
+        if visible:
+            self.target_menu.view_mode = "manual" if self.ball.target_mode == "pinned" else "auto"
+            self.target_menu.selected_agent_id = ""
+            self.target_menu.agents = []
+            self.target_menu.sessions = []
+            self.target_menu._sync_ui()
+            if self.target_menu.view_mode == "manual":
+                self.target_menu.refresh_async()
+
+    def _set_target_selector_visible(self, visible):
+        if not visible:
+            self.target_menu.invalidate_pending()
+        self.target_menu.setVisible(bool(visible))
+        self._update_target_label()
+        self._resize_after_target_change()
+
+    def _resize_after_target_change(self):
+        def settle():
+            self.adjustSize()
+            if self.isVisible() and not self._user_dragged:
+                self.move_to_ball()
+        QTimer.singleShot(0, lambda: QTimer.singleShot(0, settle))
+
+    def invalidate_target_sync(self):
+        self._target_seq += 1
+
+    def _sync_target_state(self):
+        self._target_seq += 1
+        request_seq = self._target_seq
+
+        def worker():
+            payload = None
+            try:
+                data = api_get("/target", timeout=4)
+                if data.get("ok"):
+                    payload = {**data, "seq": request_seq}
+            except Exception:
+                pass
+            if payload is not None:
+                try:
+                    self.target_state_ready.emit(payload)
+                except RuntimeError:
+                    pass
+
+        threading.Thread(target=worker, daemon=True, name="fengling-target-state").start()
+
+    def _apply_target_state(self, data):
+        if data.get("seq") != self._target_seq:
+            return
+        self.ball.target = data.get("target")
+        self.ball.target_mode = "pinned" if data.get("mode") == "pinned" else "auto"
+        self.ball.pinned_target = data.get("pinned")
+        self._update_target_label()
+
+    def _update_heart_card(self):
+        heart = self.ball.current_heart
+        visible = bool(heart) and not self._heart_card_dismissed
+        self.heart_card.setVisible(visible)
+        if not visible:
+            return
+        partner = heart.get("partnerName") or "有人"
+        gift = heart.get("gift") or {}
+        icon = gift.get("icon") or "🎁"
+        name = gift.get("name") or "一份小礼物"
+        message = heart.get("message") or ""
+        event_label = "悄悄替你留下一点动静" if heart.get("eventType") == "scene" else "悄悄放到你这里"
+        self.lbl_heart_title.setText(heart_popup_title(heart))
+        self.lbl_heart_gift.setText(f"{icon}  {name}")
+        self.lbl_heart_message.setText(message)
+        self.lbl_heart_message.setVisible(bool(message))
+        pending_count = len(getattr(self.ball, "heart_queue", []) or [])
+        queue_hint = ""
+        if pending_count > 1:
+            queue_hint = f" 还有 {pending_count - 1} 份心意，收起这张后下次再看。"
+        if heart.get("responded"):
+            self.lbl_heart_hint.setText("你已经回应过这份心意。" + queue_hint)
+        else:
+            self.lbl_heart_hint.setText(
+                f"{event_label}。如果你也想回应{partner}，可以在下面继续互动或送一份心意。{queue_hint}"
+            )
+
+    def _hide_current_heart(self):
+        # “先收着”只收起风铃里的送达提示，不删除信箱心意；
+        # 只把当前这一份写成已收起，队列里的其他心意留给后续手动查看。
+        heart = self.ball.current_heart
+        heart_id = str(heart.get("id") or "") if heart else ""
+        if heart_id:
+            dismissed_ids = getattr(self.ball, "_heart_dismissed_ids", None)
+            if dismissed_ids is not None:
+                dismissed_ids.add(heart_id)
+            queue = getattr(self.ball, "heart_queue", None)
+            if queue is not None:
+                self.ball.heart_queue = [
+                    item for item in queue if str(item.get("id") or "") != heart_id
+                ]
+            dismiss = getattr(self.ball, "_dismiss_hearts_async", None)
+            if callable(dismiss):
+                dismiss([heart_id])
+        self.ball.current_heart = None
+        self._heart_card_dismissed = True
+        self._update_heart_card()
+        self.keep_current_position(full_height=True)
+
     def _update_target_label(self):
         target = self.ball.target
+        if self.ball.target_mode == "pinned":
+            self.btn_target.setText("已固定 ▴" if self.target_menu.isVisible() else "已固定 ▾")
+            if not target:
+                self.lbl_target.setText("固定对话 · 暂未找到")
+                return
+            self.lbl_target.setText(
+                f"固定对话 · {target.get('name', target.get('id', '?'))}"
+            )
+            return
+        self.btn_target.setText("自动选择 ▴" if self.target_menu.isVisible() else "自动选择 ▾")
         if not target:
             self.lbl_target.setText("跟随当前对话 · 暂未找到")
             return
@@ -1097,8 +1996,7 @@ class FenglingMenu(QFrame):
             self.actions_box.addWidget(hint)
 
         self._update_jar()
-        if self.isVisible():
-            self.keep_current_position()
+        self.keep_current_position(full_height=has_items)
 
     def _set_busy(self, busy):
         for button in self.findChildren(QPushButton):
@@ -1125,7 +2023,10 @@ class FenglingMenu(QFrame):
 
         if res.get("success") or res.get("ok"):
             if res.get("target"):
-                self.ball.target = res.get("target")
+                target = res.get("target")
+                self.ball.target = target
+                self.ball.target_mode = "pinned" if target.get("mode") == "pinned" else "auto"
+                self.ball.pinned_target = target.get("pinned")
                 self._update_target_label()
             self._flash("送达了")
             self._refresh_jar()
@@ -1145,26 +2046,60 @@ class FenglingMenu(QFrame):
         self.lbl_feedback.setText(text)
 
     # ── 面板定位（球旁边，空间不够翻边） ──
-    def keep_current_position(self):
-        """内容高度变化时守住当前左上角，只在越界时轻推回屏幕。"""
+    def _sync_size(self):
+        """同步布局后 adjustSize：刚 addWidget 的内容在事件循环前 sizeHint 未生效，
+        直接 adjustSize 会拿到旧高度导致锚定漂移（悬浮球偏好规范坑 54）。"""
+        if self.layout() is not None:
+            self.layout().activate()
         self.adjustSize()
+
+    def keep_current_position(self, full_height=False):
+        """
+        保持/校正面板位置。full_height=True 表示本次渲染是完整内容高度
+        （动作列表已就绪），此时若尚未正式锚定则按铃铛重新锚定，保证每次
+        打开最终位置一致；内容未就绪时先贴近铃铛，避免闪现左上角。
+        """
+        if self._user_dragged:
+            # 用户拖过面板：尊重手动位置，内容变化只保持
+            self._needs_reanchor = False
+        elif full_height and self._needs_reanchor:
+            # 布局尺寸要在事件循环跑过两轮后才稳定（第一轮分配宽度，
+            # 第二轮换行高度生效），延迟锚定保证用真实全高计算位置
+            self._needs_reanchor = False
+            QTimer.singleShot(0, lambda: QTimer.singleShot(0, self._reanchor_once))
+            return
+        elif self._needs_reanchor:
+            # 内容未就绪（空/加载中）：先贴到铃铛旁边，等 full_height 时正式锚定
+            self.move_to_ball()
+            return
+        self._sync_size()
         screen = self.ball.screen() or QApplication.primaryScreen()
         geo = screen.availableGeometry()
         x = max(geo.left(), min(self.x(), geo.right() - self.width() + 1))
         y = max(geo.top(), min(self.y(), geo.bottom() - self.height() + 1))
         self.move(x, y)
 
+    def _reanchor_once(self):
+        """延迟锚定：等布局稳定后按铃铛重新定位（用于内容就绪后的首次锚定）。"""
+        if not self.isVisible():
+            return
+        self.move_to_ball()
+
     def move_to_ball(self):
-        self.adjustSize()
+        self._sync_size()
         b = self.ball
         screen = b.screen() or QApplication.primaryScreen()
         geo = screen.availableGeometry()
         bw = b.width()
+        bh = b.height()
         x = b.x() - self.width() - 8
         if x < geo.left():
             x = b.x() + bw + 8
-        y = b.y() + bw // 2 - self.height() // 2
-        y = max(geo.top(), min(y, geo.bottom() - self.height()))
+        y = popup_anchor_y(
+            (b.x(), b.y(), bw, bh), self.height(),
+            (geo.left(), geo.top(), geo.right() + 1, geo.bottom() + 1),
+            PANEL_ANCHOR_RATIO,
+        )
         self.move(x, y)
 
     def close_menu(self):
@@ -1176,6 +2111,7 @@ class FenglingMenu(QFrame):
 
     def hideEvent(self, event):
         self.target_timer.stop()
+        self.target_menu.invalidate_pending()
         super().hideEvent(event)
 
     def focusOutEvent(self, event):
