@@ -24,9 +24,9 @@ jobs:
           mkdir -p ~/.hanako/plugins
           git clone --depth 1 https://github.com/moononnn/hanako-jieyuhua.git ~/.hanako/plugins/jiegehua
       - name: Python 风铃回归（DSP/交互/布局）
-        run: xvfb-run -a python3 -m unittest discover -s tests -p "test_fengling_*.py"
-        env:
-          HANA_PLUGINS_DIR: ${{ runner.home }}/.hanako/plugins
+        run: |
+          export HANA_PLUGINS_DIR="$HOME/.hanako/plugins"
+          xvfb-run -a python3 -m unittest discover -s tests -p "test_fengling_*.py"
       - name: 命名红线检查
         run: |
           if git grep -n -I -E "玥儿|绯月|雪奈|悠米|柚月|星眠" -- . ':(exclude).github/workflows/ci.yml'; then
