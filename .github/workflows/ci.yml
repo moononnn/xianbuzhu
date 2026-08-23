@@ -13,7 +13,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-      - run: node --test tests/*.test.js
+      - run: node --test --test-concurrency=1 tests/*.test.js
       - name: 安装风铃 Python 依赖（PyQt6 + 系统库 + xvfb）
         run: |
           sudo apt-get update
