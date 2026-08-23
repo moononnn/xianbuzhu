@@ -185,12 +185,12 @@ class FenglingInteractionTests(unittest.TestCase):
         target_menu.view_mode = "manual"
         target_menu.agents = [
             {"id": "hanako", "name": "小花"},
-            {"id": "helperB", "name": "绯月"},
+            {"id": "helperB", "name": "伙伴A"},
         ]
         target_menu.sessions = [
             {
                 "agentId": "helperB",
-                "agentName": "绯月",
+                "agentName": "伙伴A",
                 "sessionPath": f"C:/sessions/{index}.jsonl",
                 "title": f"对话 {index}",
                 "lastUserTime": 1_000 + index,
@@ -202,7 +202,7 @@ class FenglingInteractionTests(unittest.TestCase):
             button for button in target_menu.findChildren(QPushButton)
             if button.objectName() == "targetItem"
         ]
-        self.assertEqual([button.text() for button in agent_buttons], ["小花", "绯月"])
+        self.assertEqual([button.text() for button in agent_buttons], ["小花", "伙伴A"])
         self.assertIn("先选一位助手", target_menu.lbl_hint.text())
 
         target_menu.selected_agent_id = "helperB"
@@ -214,7 +214,7 @@ class FenglingInteractionTests(unittest.TestCase):
         ]
         self.assertEqual(len(session_buttons), 5)
         self.assertEqual(session_buttons[0].text(), "对话 0")
-        self.assertIn("绯月", target_menu.lbl_hint.text())
+        self.assertIn("伙伴A", target_menu.lbl_hint.text())
         menu.close()
 
     def test_reopening_pinned_target_selector_refreshes_recent_sessions(self):
@@ -234,9 +234,9 @@ class FenglingInteractionTests(unittest.TestCase):
         ):
             target_menu._pick({
                 "agentId": "helperB",
-                "agentName": "绯月",
+                "agentName": "伙伴A",
                 "sessionPath": "C:/sessions/fixed.jsonl",
-                "title": "绯月的对话",
+                "title": "伙伴A的对话",
             })
         self.assertEqual(self.ball.target_mode, "pinned")
         self.assertEqual(self.ball.pinned_target["sessionPath"], "C:/sessions/fixed.jsonl")

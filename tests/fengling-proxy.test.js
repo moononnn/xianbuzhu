@@ -91,7 +91,7 @@ test("风铃代理由服务端锁定点击瞬间的最活跃会话", async () =>
 test("风铃固定目标会话后，动作会把指定 sessionPath 传到业务层", async () => {
   const fixedPath = writeSession("helperB", "2026-08-09T04:00:00.000Z", "fixed.jsonl");
   writeData({
-    pinnedTarget: { agentId: "helperB", sessionPath: fixedPath, title: "绯月的对话" },
+    pinnedTarget: { agentId: "helperB", sessionPath: fixedPath, title: "伙伴A的对话" },
   });
   writeSession("hanako", "2026-08-09T05:00:00.000Z");
   const captured = {};

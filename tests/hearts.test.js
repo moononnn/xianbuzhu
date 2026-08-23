@@ -316,7 +316,7 @@ test("主动心意：隐藏助手的历史心意不在当前信箱和风铃中�
 test("主动心意文案：区分物件用途与异步现场，拒绝实时互动腔", () => {
   const flowerPrompt = buildHeartPrompt({
     partnerName: "小花",
-    userName: "玥儿",
+    userName: "主人",
     event: { eventType: "gift", id: "bouquet", name: "一束花", icon: "💐" },
   });
   assert.match(flowerPrompt, /插进花瓶/);
@@ -366,7 +366,7 @@ test("主动心意真实链路：description 与公开性格共同决定最终�
       partnerName: id,
       description,
       voiceDescription,
-      userName: "玥儿",
+      userName: "主人",
       event: { eventType: "gift", id: "tea", name: "热茶", icon: "🍵" },
       temperament: { surfaceTag: "冷淡", innerTag: "温柔", style: "自然" },
       voiceProfile: voice,
@@ -428,10 +428,10 @@ test("主动心意提示词和审核：把声音、结构、标点与事件一�
   const voiceProfile = deriveHeartVoice("傲娇又心软，嘴上爱刁难人，实际温暖敏锐");
   const voiceVariant = selectHeartVoiceVariant("yuzuki:heart-1", voiceProfile);
   const prompt = buildHeartPrompt({
-    partnerName: "柚月",
+    partnerName: "伙伴B",
     description: "傲娇又心软，嘴上爱刁难人，实际温暖敏锐",
     voiceDescription: "柔和但不软弱，有自己的判断。",
-    userName: "玥儿",
+    userName: "主人",
     event: { eventType: "gift", id: "tea", name: "热茶", icon: "🍵" },
     temperament: { surfaceTag: "冷淡", innerTag: "温柔", style: "话少克制" },
     voiceProfile,
