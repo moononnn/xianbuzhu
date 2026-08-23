@@ -19,10 +19,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y xvfb libegl1 libgl1 libxkbcommon0 libxkbcommon-x11-0 libxcb-cursor0 libdbus-1-3
           pip3 install --break-system-packages PyQt6
-      - name: 安装解语花插件（融合球测试依赖：融合球复用其正式面板）
+      - name: 安装解语花插件 + 链接风铃插件（融合球测试依赖：融合球复用两边正式面板）
         run: |
           mkdir -p ~/.hanako/plugins
           git clone --depth 1 https://github.com/moononnn/hanako-jieyuhua.git ~/.hanako/plugins/jiegehua
+          ln -s "$GITHUB_WORKSPACE" ~/.hanako/plugins/work-visit
       - name: Python 风铃回归（DSP/交互/布局）
         run: |
           export HANA_PLUGINS_DIR="$HOME/.hanako/plugins"
