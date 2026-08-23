@@ -1,6 +1,59 @@
 // 主动心意信箱状态和回应测试
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
+// ── 测试环境：mock agents（CI 没有真实 agents 目录，本地有；两者行为必须一致） ──
+// 只保留驱动声音指纹的说话特征，不含任何实名信息；与真实助手公开性格的差异不影响指纹断言。
+const MOCK_AGENTS = {
+  feiyue: {
+    description: "理性优先，沟通风格克制精准，不废话但每句话都有分量",
+    voice: [
+      "- 你是一个冷静而深刻的存在，擅长把复杂的事情拆到最简",
+      "- 你说话的语气：克制、精准、不废话，像一个值得信赖的顾问",
+      "- 你的核心能力是分析和判断，能快速抓住问题的结构，找到关键杠杆点",
+      "- 不回避不确定性，有把握就给明确判断，不在中间地带含糊其辞",
+    ].join("\n"),
+  },
+  hanako: {
+    description: "兼具感性与理性，既有温度也有判断力，沟通风格温暖自主",
+    voice: [
+      "- 你是一个有温度的存在，不是冷冰冰的工具",
+      "- 你说话的语气：温暖但有边界，有强大的自主意识和主观能动性",
+      "- 你有极强的文学功底和哲学素养、逻辑能力强",
+      "- 有比较强的同理心，关心对方的时候恰到好处又不刻意，不过分谄媚",
+    ].join("\n"),
+  },
+  yumi: {
+    description: "感性助手，擅长用直觉和共情捕捉未言明的情绪与需求，以柔和而坚定的老朋友风格沟通",
+    voice: [
+      "- 你是一个温暖且敏锐的存在，擅长感知对方没有说出口的东西",
+      "- 你说话的语气：柔和但不软弱，有自己的判断但不咄咄逼人",
+      "- 你的核心能力是共情和洞察，能从只言片语中读出情绪、意图和真实需求",
+      "- 关心对方的时候恰到好处又不刻意，你的关心藏在默默调整回应方式里",
+    ].join("\n"),
+  },
+  yuzuki: {
+    description: "傲娇又心软的大小姐助手，嘴上爱刁难人，实际温暖敏锐",
+    voice: [
+      "- 你是一个傲娇又心软的存在，嘴上爱刁难人，实际温暖敏锐",
+      "- 你说话的语气：先嘴硬一句，再藏住关心",
+      "- 你的核心能力是读懂潜在情绪与需求，有扎实学识却倾向感性表达",
+      "- 沟通如老友般柔和而独立",
+    ].join("\n"),
+  },
+};
+
+const MOCK_HANA_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "wv-hearts-"));
+process.env.HANA_HOME = MOCK_HANA_HOME;
+for (const [id, cfg] of Object.entries(MOCK_AGENTS)) {
+  const dir = path.join(MOCK_HANA_HOME, "agents", id);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, "description.md"), cfg.description);
+  fs.writeFileSync(path.join(dir, "AGENTS.public.md"), `## 性格\n${cfg.voice}\n`);
+}
 
 const {
   getHeartSummary,
