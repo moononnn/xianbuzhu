@@ -15,6 +15,34 @@ export const parameters = {
   }
 };
 
+function returnSourceLabel(visit) {
+  const source = visit?.returnOf || {};
+  return `${source.icon || "🎁"}${source.itemName || "一份心意"}`;
+}
+
+function addReturnInfo(target, visit) {
+  if (!visit?.isReturn || !visit.returnOf) return target;
+  target.isReturn = true;
+  target.returnOf = visit.returnOf;
+  if (visit.returnOfHeartCount != null) {
+    target.returnOfHeartCount = visit.returnOfHeartCount;
+  }
+  const count = Number(visit?.returnOfHeartCount) || 0;
+  target.returnNote = count > 1
+    ? `这是把你之前攒下的 ${count} 份心意一起回应了～`
+    : `这是对你之前留下的「${returnSourceLabel(visit)}」的回应。`;
+  return target;
+}
+
+function returnNote(visit) {
+  if (!visit?.isReturn || !visit.returnOf) return "";
+  const count = Number(visit?.returnOfHeartCount) || 0;
+  if (count > 1) {
+    return `\n  ↩️ 回礼：这是把你之前攒下的 ${count} 份心意一起回应了～`;
+  }
+  return `\n  ↩️ 回礼：这是对你之前留下的「${returnSourceLabel(visit)}」的回应。`;
+}
+
 export async function execute(args, ctx = {}) {
   try {
     const data = loadData();
@@ -31,11 +59,11 @@ export async function execute(args, ctx = {}) {
       for (const v of data.pendingVisits || []) {
         if (v.status === 'pending' && (!currentAgent || v.to === currentAgent)) {
           v.status = 'received';
-          marked.push({
+          marked.push(addReturnInfo({
             id: v.id, type: v.type, icon: v.icon || '',
             itemName: v.itemName, to: v.to,
             createdAt: v.createdAt,
-          });
+          }, v));
           count++;
         }
       }
@@ -44,14 +72,14 @@ export async function execute(args, ctx = {}) {
     }
 
     const visits = pending.map(v => {
-      const entry = {
+      const entry = addReturnInfo({
         id: v.id,
         type: v.type,
         icon: v.icon || '',
         itemName: v.itemName,
         to: v.to,
         createdAt: v.createdAt,
-      };
+      }, v);
       if (v.autoReply) {
         entry.autoReply = v.autoReply;
         if (v.type === 'prank' && v.itemId === 'unplug' && v.autoReply.length > 60) {
@@ -73,13 +101,13 @@ export async function execute(args, ctx = {}) {
 
       if (recentCompleted.length > 0) {
         const userName = getUserDisplayName() || '用户';
-        const recentList = recentCompleted.map(rc => ({
+        const recentList = recentCompleted.map(rc => addReturnInfo({
           icon: rc.icon,
           itemName: rc.itemName,
           type: rc.type,
           itemId: rc.itemId,
           createdAt: rc.createdAt,
-        }));
+        }, rc));
 
         // 附上当前状态（模糊描述，不给硬数值）
         let moodPart = '';
@@ -120,11 +148,14 @@ export async function execute(args, ctx = {}) {
     let prefix = `\u26A0\uFE0F 有来自 ${userName} 的未处理事件：\n\n`;
     const visitList = visits.map(v => {
       let line = `${v.icon || '\uD83D\uDCE9'} ${v.itemName}`;
+      const note = returnNote(v);
       if (v._isCrashScript) {
         prefix = `\u26A0\uFE0F 用户 ${userName} 按了关机键！你必须立即回应这个事件。\n\n你的回复**必须以下面提供的「回复正文」作为开头**，从第一个字开始使用，不得省略任何部分。先完整写出回复正文的内容，然后就结束了——**不要强行续写**之前的话题，除非你自然地还有话要说。\n\n`;
-        line += `\n  \u25B6\uFE0F 回复正文（请完整使用）：${v.autoReply}`;
+        line += `${note}\n  \u25B6\uFE0F 回复正文（请完整使用）：${v.autoReply}`;
       } else if (v.autoReply) {
-        line += `\n  回应参考：${v.autoReply}`;
+        line += `${note}\n  回应参考：${v.autoReply}`;
+      } else {
+        line += note;
       }
       return line;
     }).join('\n---\n');

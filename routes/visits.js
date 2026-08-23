@@ -1,5 +1,5 @@
 // routes/visits.js — 展板与互动域路由
-// /api/data（展板数据）、/api/visit（互动/礼物/恶作剧）、/api/update-narrative、/api/current-agent、/api/mark-read
+// /api/heartbeat-check、/api/data（展板数据）、/api/visit（互动/礼物/恶作剧）、/api/update-narrative、/api/current-agent、/api/mark-read
 
 import fs from "node:fs";
 import path from "node:path";
@@ -18,6 +18,8 @@ import {
   withDataLock,
   findMostActiveAgentId,
 } from "../lib/data.js";
+import { getHeartSummary } from "../lib/hearts.js";
+import { requestHeartbeatTick } from "../lib/heartbeat.js";
 import {
   scanTodayActivity,
   getUserDisplayName,
@@ -35,6 +37,16 @@ const HANA_HOME = process.env.HANA_HOME || path.join(os.homedir(), ".hanako");
 
 export function registerVisits(app, ctx) {
   const bus = ctx.bus || ctx._bus;
+
+  // ════════════════════════════════════════
+  //  POST /api/heartbeat-check — 页面首次打开时的惰性兜底
+  // ════════════════════════════════════════
+  app.post("/api/heartbeat-check", (c) => {
+    requestHeartbeatTick(ctx).catch((error) => {
+      console.error("[闲不住] 页面惰性心跳失败:", error?.message || error);
+    });
+    return json({ success: true });
+  });
 
   // ════════════════════════════════════════
   //  GET /api/data — 展板数据
@@ -238,6 +250,10 @@ export function registerVisits(app, ctx) {
     // 首次引导：从未打开过纸条弹窗 + 有新纸条
     const showNoteGuide = hasNewNotes && !data.lastReadNotesTs;
 
+    // 主动心意：过期归档只在状态变化时写盘，避免前端轮询反复落盘
+    const heartSummary = getHeartSummary(data);
+    if (heartSummary.archivedChanged) saveData(data);
+
     return json({
       jar: data.jar,
       todayTotal,
@@ -250,6 +266,14 @@ export function registerVisits(app, ctx) {
       hasNotes,
       hasNewNotes,
       showNoteGuide,
+      hasHearts: heartSummary.hasHearts,
+      hasNewHearts: heartSummary.hasNewHearts,
+      showHeartGuide: heartSummary.showHeartGuide,
+      heartInbox: heartSummary.hearts,
+      heartOmittedCount: heartSummary.omittedCount,
+      heartSettings: {
+        frequency: data.heartSettings?.frequency || "low",
+      },
       pendingPartners: [
         ...new Set(
           (data.pendingVisits || [])

@@ -26,6 +26,7 @@ import {
   sendBarrage,
 } from "../lib/actions.js";
 import { isValidAgentId } from "../lib/validate.js";
+import { cancelHeartPlanForPartner } from "../lib/heartbeat.js";
 import { encryptKey } from "../lib/providers.js";
 import { readBody, json } from "./_helpers.js";
 
@@ -334,6 +335,7 @@ export function registerEconomy(app, ctx) {
       if (!cfg) return json({ success: false, error: "助手不存在" }, 400);
 
       cfg.hidden = !!hidden;
+      if (cfg.hidden) cancelHeartPlanForPartner(data, target);
       if (!saveData(data)) {
         return json({ success: false, error: "数据保存失败，请重试" }, 500);
       }

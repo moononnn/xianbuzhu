@@ -81,6 +81,14 @@
     expandedPanel: null,        // 'interact' / 'gift' / null
     _initializedOnce: false,    // 首次加载默认展开互动的标志
     fenglingRunning: false,     // 风铃悬浮球是否在跑
+    hasHearts: false,
+    hasNewHearts: false,
+    showHeartGuide: false,
+    heartInbox: [],
+    heartOmittedCount: 0,
+    heartSettings: { frequency: 'low' },
+    temperamentOptions: [],
+    temperamentDraft: null,
   };
   var currentAction = null;
 
@@ -140,10 +148,12 @@
     html += '<div class="topbar">';
     html += '<div class="topbar-left"><span class="topbar-num">' + state.jar + '</span><span class="topbar-unit">光粒</span></div>';
     html += '<div class="topbar-right">';
-    if (state.hasNotes) {
-      html += '<button class="topbar-note-btn' + (state.hasNewNotes ? ' pulse' : '') + '" onclick="window._tbShowNotes()" title="小纸条" aria-label="打开小纸条">小纸条</button>';
+    if (state.hasHearts) {
+      html += '<button class="topbar-note-btn heart-topbar-btn' + (state.hasNewHearts ? ' pulse' : '') + '" onclick="window._tbShowHearts()" title="有人悄悄给你带了点东西" aria-label="打开主动心意">心意</button>';
     }
-    html += '<button class="topbar-note-btn" onclick="window._tbOpenEditPartners()" title="编辑伙伴列表" aria-label="编辑伙伴列表">编辑</button>';
+    if (state.hasNotes) {
+      html += '<button class="topbar-note-btn note-topbar-btn' + (state.hasNewNotes ? ' pulse' : '') + '" onclick="window._tbShowNotes()" title="小纸条" aria-label="打开小纸条">小纸条</button>';
+    }
     html += '<button class="topbar-note-btn ' + (isLLMConfigured ? '' : 'topbar-warn') + '" onclick="window._tbToggleLLM()" title="模型设置" aria-label="打开模型设置">设置</button>';
     html += '<button class="fengling-toggle-wrap' + (state.fenglingRunning ? ' on' : '') + '" id="fengling-toggle" onclick="window._tbToggleFengling()" title="风铃悬浮球：桌面小风铃，送礼/互动/恶作剧不用开页面" aria-label="风铃悬浮球开关" aria-pressed="' + (state.fenglingRunning ? 'true' : 'false') + '">';
     html += '<span class="fengling-toggle-label">风铃（悬浮球）</span>';
@@ -162,6 +172,17 @@
       html += '<div class="note-guide-actions">';
       html += '<button class="note-guide-btn" onclick="window._tbShowNotes();window._tbDismissNoteGuide()">查看</button>';
       html += '<button class="note-guide-dismiss" onclick="window._tbDismissNoteGuide()">稍后</button>';
+      html += '</div></div>';
+    }
+    if (state.showHeartGuide) {
+      html += '<div class="note-guide heart-guide" id="heart-guide" role="status">';
+      html += '<div class="note-guide-body">';
+      html += '<span class="note-guide-title">有人悄悄给你带了点东西</span>';
+      html += '<span class="note-guide-desc">不急，想起来的时候去看看就好。</span>';
+      html += '</div>';
+      html += '<div class="note-guide-actions">';
+      html += '<button class="note-guide-btn" onclick="window._tbShowHearts()">去看看</button>';
+      html += '<button class="note-guide-dismiss" onclick="window._tbDismissHeartGuide()">先放着</button>';
       html += '</div></div>';
     }
 
@@ -265,6 +286,17 @@
     html += '<span class="llm-status" id="llm-custom-status"></span></div>';
     html += '<div class="llm-test-result" id="llm-custom-result"></div></div>';
     html += '<div class="llm-help">API Key 仅保存在本地并做混淆处理，请勿上传数据文件。</div>';
+    html += '<div class="heart-setting-block">';
+    html += '<div class="heart-setting-title">助手与心意</div>';
+    html += '<button class="heart-entry-btn" onclick="window._tbOpenEditPartners()">管理助手列表</button>';
+    html += '<div class="heart-entry-hint">隐藏/找回伙伴，调整每位助手的心意节奏。</div>';
+    html += '<div class="heart-setting-row"><span>整体心意密度</span><div class="heart-frequency-group">';
+    html += '<button data-heart-frequency="low" class="heart-frequency-btn' + (state.heartSettings.frequency === 'low' ? ' active' : '') + '" onclick="window._tbHeartFrequency(\'low\')">偶尔</button>';
+    html += '<button data-heart-frequency="medium" class="heart-frequency-btn' + (state.heartSettings.frequency === 'medium' ? ' active' : '') + '" onclick="window._tbHeartFrequency(\'medium\')">刚刚好</button>';
+    html += '<button data-heart-frequency="high" class="heart-frequency-btn' + (state.heartSettings.frequency === 'high' ? ' active' : '') + '" onclick="window._tbHeartFrequency(\'high\')">多一点</button>';
+    html += '</div></div>';
+    html += '<div class="llm-help">这里调整所有助手总体出现的机会；每位助手还会按自己的心意节奏，决定多久想起你、用什么方式留下心意。</div>';
+    html += '</div>';
     html += '<div class="llm-action-row"><button class="llm-save" onclick="window._tbLLMSave()">保存设置</button>';
     html += '<span class="llm-status" id="llm-status"></span></div>';
     html += '<div class="llm-test-result" id="llm-test-result"></div>';
@@ -637,12 +669,138 @@
       html += '<div class="edit-partner-row">';
       html += '<span class="edit-partner-dot" style="background:' + (p.color || '#999') + '"></span>';
       html += '<span class="edit-partner-name">' + escapeHtml(p.name) + '</span>';
+      html += '<button class="edit-partner-personality" onclick="window._tbOpenTemperament(\'' + pidSafe + '\')">心意节奏</button>';
       html += '<button class="edit-partner-hide" onclick="window._tbHidePartner(\'' + pidSafe + '\')">隐藏</button>';
       html += '</div>';
     }
     html += '</div>';
     html += '<button class="edit-partners-refresh" onclick="window._tbRefreshPartners()">🔄 刷新列表 · 找回所有伙伴</button>';
     body.innerHTML = html;
+  };
+
+  window._tbOpenTemperament = async function(partnerId) {
+    try {
+      var data = await api('/api/temperament');
+      state.temperamentOptions = data.options || [];
+      var partner = null;
+      for (var i = 0; i < (data.partners || []).length; i++) {
+        if (data.partners[i].id === partnerId) { partner = data.partners[i]; break; }
+      }
+      if (!partner) { toast('没找到这位助手', 'error'); return; }
+      state.temperamentDraft = {
+        partnerId: partnerId,
+        name: partner.name,
+        surfaceTag: partner.surfaceTag,
+        innerTag: partner.innerTag,
+        source: partner.source,
+        heartRhythm: partner.heartRhythm || 'auto',
+        rhythmOptions: data.rhythmOptions || [],
+      };
+      var overlay = document.getElementById('temperament-overlay');
+      if (!overlay) {
+        var div = document.createElement('div');
+        div.className = 'modal-overlay';
+        div.id = 'temperament-overlay';
+        div.innerHTML = '<div class="modal temperament-modal" role="dialog" aria-modal="true" aria-labelledby="temperament-title">' +
+          '<div class="notes-modal-header"><h3 id="temperament-title">主动心意的气质</h3><button class="modal-close" aria-label="关闭" onclick="document.getElementById(\'temperament-overlay\').classList.remove(\'show\')">×</button></div>' +
+          '<div id="temperament-body"></div></div>';
+        div.addEventListener('click', function(e) { if (e.target === div) div.classList.remove('show'); });
+        document.body.appendChild(div);
+        overlay = div;
+      }
+      overlay.classList.add('show');
+      window._tbRenderTemperament();
+    } catch (e) { toast('气质配置暂时打不开', 'error'); }
+  };
+
+  window._tbRenderTemperament = function() {
+    var body = document.getElementById('temperament-body');
+    var draft = state.temperamentDraft;
+    if (!body || !draft) return;
+    var html = '<div class="temperament-intro">' + escapeHtml(draft.name) + '会按自己的设定和相处状态留下心意。默认不用选；这里的调整只影响闲不住里的主动表现，不会改动她原本的身份。</div>';
+    html += '<div class="temperament-group heart-rhythm-group"><div class="temperament-label">她的心意节奏</div><div class="heart-rhythm-options">';
+    var rhythmOptions = draft.rhythmOptions || [];
+    for (var r = 0; r < rhythmOptions.length; r++) {
+      var rhythm = rhythmOptions[r];
+      var rhythmId = String(rhythm.id || '').replace(/'/g, "\\'");
+      html += '<button class="temperament-option heart-rhythm-option' + (draft.heartRhythm === rhythm.id ? ' active' : '') + '" onclick="window._tbChooseRhythm(\'' + rhythmId + '\')"><b>' + escapeHtml(rhythm.label || rhythm.id) + '</b><small>' + escapeHtml(rhythm.description || '') + '</small></button>';
+    }
+    html += '</div></div>';
+    html += '<details class="temperament-advanced"><summary>想细一点：调整她的表面和里层气质</summary><div class="temperament-advanced-body">';
+    html += '<div class="temperament-group"><div class="temperament-label">刚认识时</div><div class="temperament-options">';
+    for (var i = 0; i < state.temperamentOptions.length; i++) {
+      var option = state.temperamentOptions[i];
+      var tag = option.tag.replace(/'/g, "\\'");
+      html += '<button class="temperament-option' + (draft.surfaceTag === option.tag ? ' active' : '') + '" onclick="window._tbChooseTemperament(\'surface\',\'' + tag + '\')"><b>' + escapeHtml(option.tag) + '</b><small>' + escapeHtml(option.description) + '</small></button>';
+    }
+    html += '</div></div>';
+    html += '<div class="temperament-group"><div class="temperament-label">熟悉以后</div><div class="temperament-options">';
+    for (var j = 0; j < state.temperamentOptions.length; j++) {
+      var inner = state.temperamentOptions[j];
+      var innerTag = inner.tag.replace(/'/g, "\\'");
+      html += '<button class="temperament-option' + (draft.innerTag === inner.tag ? ' active' : '') + '" onclick="window._tbChooseTemperament(\'inner\',\'' + innerTag + '\')"><b>' + escapeHtml(inner.tag) + '</b><small>' + escapeHtml(inner.description) + '</small></button>';
+    }
+    html += '</div></div>';
+    html += '<div class="temperament-actions"><button class="heart-send-btn" id="temperament-auto" onclick="window._tbAutoTemperament()">让小花重新判断</button><button class="heart-return-btn" onclick="window._tbSaveTemperament()">收好这份感觉</button></div>';
+    html += '</div></details>';
+    html += '<div class="temperament-source">气质来源：' + (draft.source === 'user' ? '你细调的' : draft.source === 'llm' ? '自动判断' : '默认感觉') + ' · 心意节奏：' + (draft.heartRhythm === 'auto' ? '随她自己' : '你调过的') + '</div>';
+    body.innerHTML = html;
+  };
+
+  window._tbChooseRhythm = function(rhythm) {
+    if (!state.temperamentDraft) return;
+    state.temperamentDraft.heartRhythm = rhythm;
+    window._tbRenderTemperament();
+  };
+
+  window._tbChooseTemperament = function(layer, tag) {
+    if (!state.temperamentDraft) return;
+    if (layer === 'surface') state.temperamentDraft.surfaceTag = tag;
+    else state.temperamentDraft.innerTag = tag;
+    state.temperamentDraft.source = 'user';
+    window._tbRenderTemperament();
+  };
+
+  window._tbAutoTemperament = async function() {
+    var button = document.getElementById('temperament-auto');
+    if (button) { button.disabled = true; button.textContent = '正在判断…'; }
+    try {
+      var data = await api('/api/temperament', {
+        method: 'POST',
+        body: JSON.stringify({ partnerId: state.temperamentDraft.partnerId, mode: 'auto' }),
+      });
+      if (!data.success) { toast(data.error || '自动判断失败', 'error'); return; }
+      for (var i = 0; i < (data.partners || []).length; i++) {
+        if (data.partners[i].id === state.temperamentDraft.partnerId) {
+          state.temperamentDraft.surfaceTag = data.partners[i].surfaceTag;
+          state.temperamentDraft.innerTag = data.partners[i].innerTag;
+          state.temperamentDraft.source = data.partners[i].source;
+          break;
+        }
+      }
+      toast('自动判断好了');
+      window._tbRenderTemperament();
+    } catch (e) { toast('自动判断失败，请稍后再试', 'error'); }
+    finally {
+      var current = document.getElementById('temperament-auto');
+      if (current) { current.disabled = false; current.textContent = '让小花重新判断'; }
+    }
+  };
+
+  window._tbSaveTemperament = async function() {
+    var draft = state.temperamentDraft;
+    if (!draft) return;
+    try {
+      var data = await api('/api/temperament', {
+        method: 'POST',
+        body: JSON.stringify({ partnerId: draft.partnerId, surfaceTag: draft.surfaceTag, innerTag: draft.innerTag, rhythm: draft.heartRhythm || 'auto' }),
+      });
+      if (!data.success) { toast(data.error || '保存失败', 'error'); return; }
+      toast('这份感觉收好了');
+      var overlay = document.getElementById('temperament-overlay');
+      if (overlay) overlay.classList.remove('show');
+      window._tbRenderEditList();
+    } catch (e) { toast('保存失败，请再试一次', 'error'); }
   };
 
   window._tbHidePartner = async function(target) {
@@ -1107,6 +1265,114 @@
     if (btn) btn.classList.remove('pulse');
   };
 
+  // ─── 主动心意：只展示心意，并把用户引回现有互动入口 ───
+  function safeHeartId(value) {
+    return String(value || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/[\r\n]/g, '');
+  }
+
+  window._tbContinueFromHeart = function(partnerId) {
+    var partner = findPartner(partnerId);
+    if (partner) {
+      state.selectedPartnerId = partner.id;
+      state.expandedPanel = 'interact';
+      render();
+    }
+    var overlay = document.getElementById('hearts-overlay');
+    if (overlay) overlay.classList.remove('show');
+    setTimeout(function() {
+      var panel = document.querySelector('.partner-panel');
+      if (panel && panel.scrollIntoView) panel.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 0);
+  };
+
+  window._tbDismissHeartGuide = async function() {
+    try { await api('/api/hearts/read', { method: 'POST' }); } catch {}
+    state.hasNewHearts = false;
+    state.showHeartGuide = false;
+    var guide = document.getElementById('heart-guide');
+    if (guide) guide.style.display = 'none';
+    var btn = document.querySelector('.heart-topbar-btn');
+    if (btn) btn.classList.remove('pulse');
+  };
+
+  window._tbShowHearts = async function() {
+    var overlay = document.getElementById('hearts-overlay');
+    if (!overlay) {
+      var div = document.createElement('div');
+      div.className = 'modal-overlay';
+      div.id = 'hearts-overlay';
+      div.innerHTML = '<div class="modal heart-modal" role="dialog" aria-modal="true" aria-labelledby="hearts-modal-title">' +
+        '<div class="notes-modal-header">' +
+        '<h3 id="hearts-modal-title">心意</h3>' +
+        '<button class="modal-close" aria-label="关闭心意" onclick="document.getElementById(\'hearts-overlay\').classList.remove(\'show\')">×</button>' +
+        '</div>' +
+        '<div class="heart-list" id="heart-list"><div class="llm-loading">加载中...</div></div></div>';
+      div.addEventListener('click', function(e) {
+        if (e.target === div) div.classList.remove('show');
+      });
+      document.body.appendChild(div);
+      overlay = div;
+    }
+    overlay.classList.add('show');
+    await loadHearts();
+    try { await api('/api/hearts/read', { method: 'POST' }); } catch {}
+    state.hasNewHearts = false;
+    state.showHeartGuide = false;
+    var guide = document.getElementById('heart-guide');
+    if (guide) guide.style.display = 'none';
+    var btn = document.querySelector('.heart-topbar-btn');
+    if (btn) btn.classList.remove('pulse');
+  };
+
+  async function loadHearts() {
+    try {
+      var data = await api('/api/hearts');
+      var list = document.getElementById('heart-list');
+      if (!list) return;
+      var hearts = data.hearts || [];
+      if (!hearts.length) {
+        list.innerHTML = '<div class="heart-empty"><div class="heart-empty-mark">◌</div>这里暂时没有新的心意</div>';
+        return;
+      }
+      var html = '';
+      for (var i = 0; i < hearts.length; i++) {
+        var heart = hearts[i];
+        var partnerId = safeHeartId(heart.partnerId);
+        var partnerName = heart.partnerName || '有人';
+        var gift = heart.gift || {};
+        var heartEventLabel = heart.eventType === 'scene' ? '悄悄替你留下一点动静' : '悄悄放到你这里';
+        html += '<article class="heart-item">';
+        html += '<div class="heart-item-head"><span class="heart-item-from">' + escapeHtml(partnerName) + '</span>' + (heart.responded ? '<span class="heart-responded-badge">已回礼</span>' : '') + '<span class="heart-item-time">' + timeAgo(heart.createdAt) + '</span></div>';
+        html += '<div class="heart-gift"><span class="heart-gift-icon">' + escapeHtml(gift.icon || '🎁') + '</span><span><b>' + escapeHtml(gift.name || '一份小礼物') + '</b><small>' + heartEventLabel + '</small></span></div>';
+        html += '<div class="heart-message">' + escapeHtml(heart.message || '') + '</div>';
+        if (heart.responded) {
+          html += '<div class="heart-continue-hint">你已经回应过这份心意。</div>';
+        } else {
+          html += '<div class="heart-continue-hint">如果你也想回应' + escapeHtml(partnerName) + '，可以继续互动或送一份心意。 <button class="heart-continue-link" onclick="window._tbContinueFromHeart(\'' + partnerId + '\')">去互动</button></div>';
+        }
+        html += '</article>';
+      }
+      if (data.pastMessage) html += '<div class="heart-past-note">' + escapeHtml(data.pastMessage) + '</div>';
+      list.innerHTML = html;
+    } catch (e) {
+      var list = document.getElementById('heart-list');
+      if (list) list.innerHTML = '<div class="heart-empty">心意暂时没送到，等会儿再来看看。</div>';
+    }
+  }
+
+  window._tbRefreshHeartState = async function() {
+    try {
+      var fresh = await api('/api/data');
+      state.jar = fresh.jar || state.jar;
+      state.hasHearts = !!fresh.hasHearts;
+      state.hasNewHearts = !!fresh.hasNewHearts;
+      state.showHeartGuide = !!fresh.showHeartGuide;
+      state.heartInbox = fresh.heartInbox || [];
+      state.heartOmittedCount = fresh.heartOmittedCount || 0;
+      render();
+    } catch {}
+  };
+
   // ─── 小纸条弹窗 ───
   window._tbShowNotes = async function() {
     var overlay = document.getElementById('notes-overlay');
@@ -1134,7 +1400,7 @@
     state.showNoteGuide = false;
     var guide = document.getElementById('note-guide');
     if (guide) guide.style.display = 'none';
-    var btn = document.querySelector('.topbar-note-btn');
+    var btn = document.querySelector('.note-topbar-btn');
     if (btn) btn.classList.remove('pulse');
   };
 
@@ -1220,6 +1486,38 @@
 
   // ─── 模型设置（占位）──
   var _llmProviders = [];
+
+  function refreshHeartSettingControls() {
+    var frequencyButtons = document.querySelectorAll('[data-heart-frequency]');
+    for (var i = 0; i < frequencyButtons.length; i++) {
+      frequencyButtons[i].classList.toggle('active', frequencyButtons[i].getAttribute('data-heart-frequency') === state.heartSettings.frequency);
+    }
+  }
+
+  window._tbHeartFrequency = async function(frequency) {
+    var previous = state.heartSettings.frequency;
+    state.heartSettings.frequency = frequency;
+    refreshHeartSettingControls();
+    try {
+      var data = await api('/api/heart-settings', {
+        method: 'POST',
+        body: JSON.stringify({ frequency: frequency }),
+      });
+      if (data.success) {
+        state.heartSettings = data.settings || state.heartSettings;
+        toast('整体心意密度已调整');
+        refreshHeartSettingControls();
+      } else {
+        state.heartSettings.frequency = previous;
+        toast(data.error || '调整失败', 'error');
+        refreshHeartSettingControls();
+      }
+    } catch (e) {
+      state.heartSettings.frequency = previous;
+      toast('调整失败，请再试一次', 'error');
+      refreshHeartSettingControls();
+    }
+  };
 
   window._tbToggleLLM = function() {
     var modal = document.getElementById('llm-modal');
@@ -1467,6 +1765,12 @@
       state.hasNotes = data.hasNotes || false;
       state.hasNewNotes = data.hasNewNotes || false;
       state.showNoteGuide = data.showNoteGuide || false;
+      state.hasHearts = data.hasHearts || false;
+      state.hasNewHearts = data.hasNewHearts || false;
+      state.showHeartGuide = data.showHeartGuide || false;
+      state.heartInbox = data.heartInbox || [];
+      state.heartOmittedCount = data.heartOmittedCount || 0;
+      state.heartSettings = data.heartSettings || state.heartSettings;
       state.version = data.version || '0.1.0';
       state.pendingDetails = data.pendingDetails || [];
 
@@ -1510,13 +1814,30 @@
 
       // 风铃：打开页面自动启动（用户手动收起过则本次不再弹）
       window._tbFenglingAutoBoot();
+      // 后台心跳若恰好休眠过，首次打开页面再补一次检查；错过的计划仍不会补发。
+      api('/api/heartbeat-check', { method: 'POST' }).catch(function() {});
     } catch (e) {
       console.error('[闲不住] 加载失败:', e);
     }
   }
 
-  // ─── v0.4：定时轮询当前 agent（5 秒一次）──
+  // ─── v0.4：定时轮询当前 agent / 心意 / 风铃（5 秒一次）──
   setInterval(async function() {
+    // 心意到达后，页面本身也能看到轻提示；风铃只是信使，不承担回复。
+    try {
+      var heartState = await api('/api/data');
+      var heartChanged = state.hasHearts !== !!heartState.hasHearts
+        || state.hasNewHearts !== !!heartState.hasNewHearts
+        || state.showHeartGuide !== !!heartState.showHeartGuide;
+      state.hasHearts = !!heartState.hasHearts;
+      state.hasNewHearts = !!heartState.hasNewHearts;
+      state.showHeartGuide = !!heartState.showHeartGuide;
+      state.heartInbox = heartState.heartInbox || state.heartInbox;
+      state.heartOmittedCount = heartState.heartOmittedCount || 0;
+      state.heartSettings = heartState.heartSettings || state.heartSettings;
+      if (heartChanged) render();
+    } catch {}
+
     try {
       var curRes = await api('/api/current-agent');
       if (curRes.success && curRes.agentId) {
