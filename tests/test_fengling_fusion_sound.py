@@ -62,6 +62,78 @@ class FenglingFusionSoundTests(unittest.TestCase):
         with patch.dict(os.environ, {}, clear=True):
             self.assertEqual(fusion_ball.resolve_fusion_sound_volume({}), 0.0)
 
+    @unittest.skipIf(sys.platform != "win32", "winsound 回退仅 Windows 平台")
+    def test_fusion_qsound_loading_falls_back_instead_of_silently_dropping_chime(self):
+        class FakeVoice:
+            class Status:
+                Ready = object()
+
+            def __init__(self):
+                self.played = False
+
+            def isPlaying(self):
+                return False
+
+            def status(self):
+                return "loading"
+
+            def setVolume(self, _volume):
+                return None
+
+            def play(self):
+                self.played = True
+
+        ball = fusion_ball.FusionBall.__new__(fusion_ball.FusionBall)
+        ball.sound_volume = 1.0
+        ball._sound_cooldown = 0.0
+        with open(ROOT / "python" / "fengling-chime-cluster.wav", "rb") as sample_file:
+            sample = sample_file.read()
+        ball._chime_pool = [sample]
+        ball._last_chime_idx = -1
+        ball._sound_voice_index = 0
+        voice = FakeVoice()
+        ball._sound_voices = [voice]
+        with (
+            patch.object(fusion_ball, "QSoundEffect", FakeVoice),
+            patch.object(fusion_ball.winsound, "PlaySound") as play,
+        ):
+            ball._play_chime(24.0)
+        play.assert_called_once()
+        self.assertFalse(voice.played)
+
+    def test_fusion_drag_has_a_backward_compatible_flower_physics_fallback(self):
+        with (
+            patch.object(fusion_ball._ORIGINAL_ZHUJIAN, "flower_drag_targets", None),
+            patch.object(fusion_ball._ORIGINAL_ZHUJIAN, "flower_drag_impulses", None),
+            patch.object(fusion_ball._ORIGINAL_ZHUJIAN, "advance_motion_spring", None),
+        ):
+            targets = fusion_ball.shared_flower_drag_targets(1000.0, 600.0)
+            impulses = fusion_ball.shared_flower_drag_impulses(800.0, 400.0)
+            value, velocity = fusion_ball.advance_shared_drag_spring(
+                0.0, 0.0, targets[0], 58.0, 12.5, 1 / 60, 7.5,
+            )
+        self.assertLess(targets[2], targets[1])
+        self.assertLess(impulses[2], impulses[1])
+        self.assertLess(value, 0.0)
+        self.assertLess(velocity, 0.0)
+
+    def test_fusion_drag_feeds_both_wind_chime_and_flower_weight_layers(self):
+        ball = fusion_ball.FusionBall()
+        try:
+            ball.move(100, 100)
+            ball._reset_drag_motion(now=1.0)
+            ball.move(166, 128)
+            ball._record_drag_motion(now=1.05)
+            self.assertGreater(ball._drag_velocity_x, 0.0)
+            self.assertLess(ball.velocity_bell, 0.0)
+            self.assertNotEqual(ball.velocity_clapper_spin, 0.0)
+            self.assertLess(ball.drag_branch_velocity, 0.0)
+            self.assertLess(ball.drag_flower_velocity, ball.drag_branch_velocity)
+            self.assertLess(ball.drag_leaf_velocity, ball.drag_flower_velocity)
+            self.assertLess(ball.drag_vertical_velocity, 0.0)
+        finally:
+            ball.close()
+
     def test_fusion_context_menu_matches_original_nested_volume_menu(self):
         menu = fusion_ball.FusionContextMenu(_FakeFusionBall())
         try:
@@ -280,6 +352,54 @@ class FenglingFusionSoundTests(unittest.TestCase):
         self.app.processEvents()
         self.assertTrue(ball._moved)
         self.assertEqual(panel.pos() - before_panel, ball.pos() - before_ball)
+        panel.close()
+        ball.close()
+        self.app.processEvents()
+
+    def test_fusion_read_panel_drag_also_feeds_both_physics_systems(self):
+        ball = fusion_ball.FusionBall()
+        ball.move(300, 300)
+        ball.show()
+        panel = fusion_ball.FusionReadPanel(ball)
+        ball.read_panel = panel
+        panel.move(100, 260)
+        panel.show()
+        self.app.processEvents()
+        before_ball = ball.pos()
+        before_panel = panel.pos()
+        press = QMouseEvent(
+            QEvent.Type.MouseButtonPress,
+            QPointF(12, 12),
+            QPointF(before_panel.x() + 12, before_panel.y() + 12),
+            Qt.MouseButton.LeftButton,
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+        panel.mousePressEvent(press)
+        move = QMouseEvent(
+            QEvent.Type.MouseMove,
+            QPointF(62, 42),
+            QPointF(before_panel.x() + 62, before_panel.y() + 42),
+            Qt.MouseButton.LeftButton,
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+        panel.mouseMoveEvent(move)
+        self.app.processEvents()
+        self.assertEqual(ball.pos() - before_ball, panel.pos() - before_panel)
+        self.assertTrue(ball._drag_motion_active)
+        self.assertNotEqual(ball.velocity_clapper_spin, 0.0)
+        self.assertNotEqual(ball.drag_leaf_velocity, 0.0)
+        release = QMouseEvent(
+            QEvent.Type.MouseButtonRelease,
+            QPointF(62, 42),
+            QPointF(before_panel.x() + 62, before_panel.y() + 42),
+            Qt.MouseButton.LeftButton,
+            Qt.MouseButton.NoButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+        panel.mouseReleaseEvent(release)
+        self.assertFalse(ball._drag_motion_active)
         panel.close()
         ball.close()
         self.app.processEvents()

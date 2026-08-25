@@ -1,6 +1,19 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400" width="400" height="400">
+  <defs>
+    <linearGradient id="paperGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#f9c7d2"/>
+      <stop offset="0.52" stop-color="#f3afbf"/>
+      <stop offset="1" stop-color="#e895aa"/>
+    </linearGradient>
+  </defs>
   <g id="tanzaku" transform="translate(200 258)">
     <!-- 纸片只绕自己的顶部轻转；柔线、结点和铃舌由程序实时绘制 -->
-    <path d="M-12 -6 Q0 -10 12 -6 L11 49 L6 58 L0 52 L-6 58 L-11 49 Z" fill="#f3afbf" stroke="#d9869c" stroke-width="1.6" stroke-linejoin="round"/>
+    <path d="M-12 -6 Q0 -10 12 -6 L11 49 L6 58 L0 52 L-6 58 L-11 49 Z"
+          fill="url(#paperGrad)" stroke="#c9788f" stroke-width="1.7" stroke-linejoin="round"/>
+    <path d="M-7 -3 Q-1 -6 5 -4 L4 45" fill="none" stroke="#fff5f7" stroke-width="2.1"
+          stroke-linecap="round" opacity="0.56"/>
+    <circle cx="0" cy="4" r="2.1" fill="#fff1c9" stroke="#c9856f" stroke-width="0.9"/>
+    <path d="M-4 17 Q0 14 4 17 M-5 25 Q0 22 5 25" fill="none" stroke="#d88198"
+          stroke-width="1.15" stroke-linecap="round" opacity="0.74"/>
   </g>
 </svg>

@@ -6,10 +6,12 @@
 """
 import os
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+os.environ["HANA_HOME"] = tempfile.mkdtemp(prefix="wv-fengling-delivery-")
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "python"))
 
@@ -52,6 +54,13 @@ class FenglingDeliveryPhysicsTests(unittest.TestCase):
             self.assertTrue(ok, f"kick={kick} 应产生撞击")
             self.assertGreaterEqual(impact, app.CHIME_MIN_IMPACT)
             self.assertLess(frame, 30, "应在半秒内撞壁")
+
+    def test_click_kick_from_rest_produces_a_quick_chime(self):
+        """鼠标轻点使用同一套物理碰壁，半秒内应能听到一声。"""
+        ok, impact, frame = _integrate(app.CLICK_CLAPPER_KICK)
+        self.assertTrue(ok, "点击冲量应产生撞击")
+        self.assertGreaterEqual(impact, app.CHIME_MIN_IMPACT)
+        self.assertLess(frame, 40, "点击后应在约半秒内响起")
 
     def test_three_kicks_produce_three_chimes(self):
         """三次交替 kick（0/260/520ms）按送达间隔稳定产生三声，力度自然衰减。"""

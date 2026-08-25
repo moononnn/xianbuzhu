@@ -18,7 +18,10 @@
   <!-- 单只薄荷瓷铃（原中央铃，完整保留） -->
   <path class="bell-body" d="M200 102 C178 103 164 116 162 136 L159 171 Q158 184 171 184 L229 184 Q242 184 241 171 L238 136 C236 116 222 103 200 102 Z" fill="url(#bellGrad)" stroke="#66aa96" stroke-width="2.5" stroke-linejoin="round"/>
   <path d="M181 119 C175 133 177 151 184 165" fill="none" stroke="#f7fff9" stroke-width="4.5" stroke-linecap="round" opacity="0.62"/>
-  <path d="M173 184 Q200 189 227 184" fill="none" stroke="#438b77" stroke-width="3" stroke-linecap="round"/>
+  <!-- 铃口内沿加一层薄阴影：程序绘制的铃舌从里面探出，不再像贴在铃面上 -->
+  <path d="M161 172 Q200 184 239 172 L240 180 Q200 194 160 180 Z" fill="#3f7567" opacity="0.20"/>
+  <path d="M165 176 Q200 187 235 176" fill="none" stroke="#dff6ee" stroke-width="1.7" stroke-linecap="round" opacity="0.78"/>
+  <path d="M173 184 Q200 190 227 184" fill="none" stroke="#438b77" stroke-width="3" stroke-linecap="round"/>
 
   <!-- 樱花彩绘（原中央铃，完整保留） -->
   <g id="deco" transform="translate(207 140)">

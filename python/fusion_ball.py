@@ -172,18 +172,20 @@ PAPER_PIVOT = (200 * RENDER_SCALE, 246 * RENDER_SCALE)
 LINK_TOP = (200 * RENDER_SCALE, 112 * RENDER_SCALE)
 CLAPPER_LENGTH = 74 * RENDER_SCALE
 PAPER_LINE_LENGTH = 60 * RENDER_SCALE
-CLAPPER_RX = 14
-CLAPPER_RY = 11
+CLAPPER_RX = 16
+CLAPPER_RY = 13
 
 # 风铃原版参数
 MIN_WIND_STRENGTH = 0.62
 MAX_WIND_STRENGTH = 1.45
 FULL_GUST_SPEED = 1200.0
-CLAPPER_LIMIT = 12.0
-CLAPPER_SPRING = 20.0
-CLAPPER_DAMP = 3.2
+CLAPPER_LIMIT = 11.0
+CLAPPER_SPRING = 7.5
+CLAPPER_DAMP = 2.8
 CHIME_MIN_IMPACT = 7.0
 CHIME_COOLDOWN = 0.10
+DRAG_CHIME_WINDOW_S = 1.0    # 拖动结束后的余势响铃窗口：期内非悬停撞壁也出声，画面声音同步
+HOVERLESS_CHIME_VOLUME = 0.7 # 非悬停响铃音量倍率：悬停/送达为 1.0，余势轻轻一点
 # 送达响铃：给铃舌的真实晃动冲量（度/秒），由物理撞壁触发 _play_chime（因动而声）。
 DELIVERY_KICK = 200.0
 DELIVERY_RING_WINDOW_S = 2.0  # 送达响铃窗口：期内允许非悬停撞壁发声
@@ -398,7 +400,9 @@ def chime_volume_from_impact(impact, base, min_impact=CHIME_MIN_IMPACT):
     return base * (0.55 + 0.45 * strength)
 
 
-def linkage_points(clapper_angle, paper_angle):
+def linkage_points(
+    clapper_angle, paper_angle, paper_offset_x=0.0, paper_offset_y=0.0
+):
     top = QPointF(*LINK_TOP)
     clapper_rad = math.radians(float(clapper_angle))
     clapper = QPointF(
@@ -407,8 +411,8 @@ def linkage_points(clapper_angle, paper_angle):
     )
     paper_rad = math.radians(float(paper_angle))
     knot = QPointF(
-        clapper.x() + math.sin(paper_rad) * PAPER_LINE_LENGTH,
-        clapper.y() + math.cos(paper_rad) * PAPER_LINE_LENGTH,
+        clapper.x() + math.sin(paper_rad) * PAPER_LINE_LENGTH + float(paper_offset_x),
+        clapper.y() + math.cos(paper_rad) * PAPER_LINE_LENGTH + float(paper_offset_y),
     )
     return top, clapper, knot
 
@@ -434,6 +438,50 @@ def cursor_wind_components(velocity_x, velocity_y, strength, direction):
     vertical_sign = 1.0 if velocity_y > 0.0 else -1.0 if velocity_y < 0.0 else 0.0
     vertical = vertical_sign * float(strength) * abs(velocity_y) / axis_total
     return horizontal, vertical
+
+
+def shared_flower_drag_targets(velocity_x, velocity_y):
+    """优先复用新版解语花；旧版未升级时保留同参数兜底，融合球不能因此起不来。"""
+    helper = getattr(_ORIGINAL_ZHUJIAN, "flower_drag_targets", None)
+    if callable(helper):
+        return helper(velocity_x, velocity_y)
+    vx = float(velocity_x)
+    vy = float(velocity_y)
+    return (
+        max(-7.2, min(-vx * 0.0048, 7.2)),
+        max(-13.5, min(-vx * 0.0092, 13.5)),
+        max(-19.0, min(-vx * 0.0130, 19.0)),
+        max(-4.8, min(-vy * 0.0036, 4.8)),
+    )
+
+
+def shared_flower_drag_impulses(delta_vx, delta_vy):
+    helper = getattr(_ORIGINAL_ZHUJIAN, "flower_drag_impulses", None)
+    if callable(helper):
+        return helper(delta_vx, delta_vy)
+    dvx = float(delta_vx)
+    dvy = float(delta_vy)
+    return (
+        max(-18.0, min(-dvx * 0.018, 18.0)),
+        max(-34.0, min(-dvx * 0.036, 34.0)),
+        max(-50.0, min(-dvx * 0.055, 50.0)),
+        max(-20.0, min(-dvy * 0.018, 20.0)),
+    )
+
+
+def advance_shared_drag_spring(value, velocity, target, stiffness, damping, dt, limit):
+    helper = getattr(_ORIGINAL_ZHUJIAN, "advance_motion_spring", None)
+    if callable(helper):
+        return helper(value, velocity, target, stiffness, damping, dt, limit)
+    dt = max(0.0, min(float(dt), 0.05))
+    acceleration = (
+        (float(target) - float(value)) * float(stiffness)
+        - float(velocity) * float(damping)
+    )
+    velocity = float(velocity) + acceleration * dt
+    value = float(value) + velocity * dt
+    value = max(-abs(float(limit)), min(value, abs(float(limit))))
+    return value, velocity
 
 
 def component_motion(t, bloom, gust, direction, rebound_pulse=0.0):
@@ -592,15 +640,21 @@ class FusionBall(QWidget):
         self.angle_bell = 0.0
         self.angle_taz = 0.0
         self.angle_clapper = 0.0
+        self.angle_clapper_spin = 0.0
         self.velocity_bell = 0.0
         self.velocity_taz = 0.0
         self.velocity_clapper = 0.0
+        self.velocity_clapper_spin = 0.0
+        self.angle_paper_spin = 0.0
+        self.velocity_paper_spin = 0.0
         self._sound_cooldown = 0.0
         self._delivery_ring_until = 0.0  # 送达响铃窗口截止；期内撞壁允许非悬停发声
+        self._drag_chime_until = 0.0  # 拖动余势响铃窗口截止；期内非悬停撞壁也出声
         self.sound_volume = resolve_fusion_sound_volume()
         self._chime_pool = []
         self._last_chime_idx = -1
         self._sound_voices = []
+        self._sound_voice_paths = []
         self._sound_voice_index = 0
         self._init_chime_pool()
         self._init_sound_voices()
@@ -616,6 +670,14 @@ class FusionBall(QWidget):
         self.cursor_lift = 0.0
         self.cursor_velocity = (0.0, 0.0)
         self.bloom = 0.0
+        self.drag_branch_angle = 0.0
+        self.drag_branch_velocity = 0.0
+        self.drag_flower_angle = 0.0
+        self.drag_flower_velocity = 0.0
+        self.drag_leaf_angle = 0.0
+        self.drag_leaf_velocity = 0.0
+        self.drag_vertical = 0.0
+        self.drag_vertical_velocity = 0.0
         self.pressed = False
         self.press_amount = 0.0
         self.press_velocity = 0.0
@@ -659,6 +721,13 @@ class FusionBall(QWidget):
         self._drag = None
         self._press_global = None
         self._moved = False
+        self._drag_motion_active = False
+        self._drag_sample_x = 0.0
+        self._drag_sample_y = 0.0
+        self._drag_sample_ts = self._last_ts
+        self._drag_velocity_x = 0.0
+        self._drag_velocity_y = 0.0
+        self._drag_motion_last_ts = self._last_ts
         self._press_flower = False
         self._drag_menu_was_visible = False
         self._drag_read_was_visible = False
@@ -706,6 +775,86 @@ class FusionBall(QWidget):
             return QPixmap()
         return pix
 
+    def _reset_drag_motion(self, now=None):
+        now = time.monotonic() if now is None else float(now)
+        pos = self.pos()
+        self._drag_sample_x = float(pos.x())
+        self._drag_sample_y = float(pos.y())
+        self._drag_sample_ts = now
+        self._drag_velocity_x = 0.0
+        self._drag_velocity_y = 0.0
+        self._drag_motion_last_ts = now
+        self._drag_motion_active = False
+
+    def _apply_drag_impulses(self, delta_vx, delta_vy):
+        bell, paper, clapper, spin = _ORIGINAL_FENGLING.wind_chime_drag_impulses(
+            delta_vx, delta_vy
+        )
+        self.velocity_bell += bell
+        self.velocity_taz += paper
+        self.velocity_clapper += clapper
+        self.velocity_clapper_spin += spin
+        branch, flower, leaf, vertical = shared_flower_drag_impulses(
+            delta_vx, delta_vy
+        )
+        self.drag_branch_velocity += branch
+        self.drag_flower_velocity += flower
+        self.drag_leaf_velocity += leaf
+        self.drag_vertical_velocity += vertical
+
+    def _record_drag_motion(self, position=None, now=None):
+        now = time.monotonic() if now is None else float(now)
+        position = self.pos() if position is None else position
+        vx, vy, dvx, dvy, _speed = _ORIGINAL_FENGLING.sample_drag_velocity(
+            self._drag_sample_x,
+            self._drag_sample_y,
+            self._drag_sample_ts,
+            self._drag_velocity_x,
+            self._drag_velocity_y,
+            position.x(),
+            position.y(),
+            now,
+        )
+        self._drag_sample_x = float(position.x())
+        self._drag_sample_y = float(position.y())
+        self._drag_sample_ts = now
+        self._drag_velocity_x = vx
+        self._drag_velocity_y = vy
+        self._drag_motion_last_ts = now
+        self._drag_motion_active = True
+        self._apply_drag_impulses(dvx, dvy)
+
+    def _release_drag_motion(self):
+        if self._drag_motion_active:
+            self._apply_drag_impulses(
+                -self._drag_velocity_x * 0.30,
+                -self._drag_velocity_y * 0.30,
+            )
+        self._drag_velocity_x *= 0.25
+        self._drag_velocity_y *= 0.25
+        self._drag_motion_active = False
+        self._drag_motion_last_ts = time.monotonic()
+
+    def _decay_drag_motion(self, now, dt):
+        fresh = (
+            self._drag_motion_active
+            and now - self._drag_motion_last_ts <= _ORIGINAL_FENGLING.DRAG_STALE_AFTER
+        )
+        if fresh:
+            return
+        decay = math.exp(-dt / _ORIGINAL_FENGLING.DRAG_DECAY_TAU)
+        self._drag_velocity_x *= decay
+        self._drag_velocity_y *= decay
+        if math.hypot(self._drag_velocity_x, self._drag_velocity_y) < 0.5:
+            self._drag_velocity_x = 0.0
+            self._drag_velocity_y = 0.0
+
+    def _cancel_press_for_drag(self):
+        if not self.pressed:
+            return
+        self.pressed = False
+        self.press_velocity = min(self.press_velocity, -3.4)
+
     # ── 动画帧 ──
     def _tick(self):
         now = time.monotonic()
@@ -713,6 +862,51 @@ class FusionBall(QWidget):
         dt = min(frame_elapsed, 0.05)
         self._last_ts = now
         self.t += dt
+        self._decay_drag_motion(now, dt)
+        dragging = bool(
+            self._drag_motion_active
+            and now - self._drag_motion_last_ts <= 0.18
+        )
+        drag_speed = math.hypot(self._drag_velocity_x, self._drag_velocity_y)
+        drag_influence = min(1.0, drag_speed / 180.0)
+        (
+            drag_bell_target,
+            drag_taz_target,
+            drag_clapper_target,
+            drag_spin_drive,
+        ) = _ORIGINAL_FENGLING.wind_chime_drag_targets(
+            self._drag_velocity_x, self._drag_velocity_y
+        )
+        tanzaku_air_influence = _ORIGINAL_FENGLING.tanzaku_airflow_influence(
+            self._drag_velocity_x, self._drag_velocity_y
+        )
+        clapper_air_influence = _ORIGINAL_FENGLING.clapper_airflow_influence(
+            self._drag_velocity_x, self._drag_velocity_y
+        )
+        (
+            drag_branch_target,
+            drag_flower_target,
+            drag_leaf_target,
+            drag_vertical_target,
+        ) = shared_flower_drag_targets(
+            self._drag_velocity_x, self._drag_velocity_y
+        )
+        self.drag_branch_angle, self.drag_branch_velocity = advance_shared_drag_spring(
+            self.drag_branch_angle, self.drag_branch_velocity,
+            drag_branch_target, 58.0, 12.5, dt, 7.5,
+        )
+        self.drag_flower_angle, self.drag_flower_velocity = advance_shared_drag_spring(
+            self.drag_flower_angle, self.drag_flower_velocity,
+            drag_flower_target, 40.0, 8.0, dt, 14.0,
+        )
+        self.drag_leaf_angle, self.drag_leaf_velocity = advance_shared_drag_spring(
+            self.drag_leaf_angle, self.drag_leaf_velocity,
+            drag_leaf_target, 30.0, 6.8, dt, 20.0,
+        )
+        self.drag_vertical, self.drag_vertical_velocity = advance_shared_drag_spring(
+            self.drag_vertical, self.drag_vertical_velocity,
+            drag_vertical_target, 52.0, 11.0, dt, 5.0,
+        )
 
         # 融合态继续沿用风铃的心意信箱轮询；新心意只播放提示音，用户点击融合球后查看。
         self._heart_poll_elapsed += dt
@@ -804,7 +998,11 @@ class FusionBall(QWidget):
             self.cursor_wind *= math.exp(-dt / 0.16)
             self.cursor_lift *= math.exp(-dt / 0.16)
             self.cursor_velocity = (0.0, 0.0)
-            resting_strength = 0.24 if self.flower_hovered and not self.pressed else 0.0
+            resting_strength = (
+                0.24
+                if self.flower_hovered and not self.pressed and not dragging
+                else 0.0
+            )
             self.hover_strength += (resting_strength - self.hover_strength) * (1.0 - math.exp(-dt / 0.30))
 
         self.hovered = cursor_hovered
@@ -812,7 +1010,7 @@ class FusionBall(QWidget):
         self._sweep_petal_cooldown = max(0.0, self._sweep_petal_cooldown - dt)
 
         # 共同来风的进出节奏：两套原版都保留自己的目标角与阻尼。
-        wind_target = 1.0 if self.hovered else 0.0
+        wind_target = 0.14 if dragging else 1.0 if self.hovered else 0.0
         wind_tau = 0.14 if self.hovered else 1.10
         self.hover_wind += (wind_target - self.hover_wind) * (1.0 - math.exp(-dt / wind_tau))
         self.gust *= math.exp(-dt / 0.68)
@@ -832,7 +1030,11 @@ class FusionBall(QWidget):
             + self.hover_strength * 2.2 * math.sin(self.t * 7.3 + 1.2)
         ) + base_wind * 1.2
         strong_acc_bell = (strong_bell_target - self.angle_bell) * 24.0 - self.velocity_bell * 5.0
-        acc_bell = normal_acc_bell * (1.0 - self.hover_wind) + strong_acc_bell * self.hover_wind
+        hover_mix = self.hover_wind * (0.12 if dragging else 1.0)
+        acc_bell = normal_acc_bell * (1.0 - hover_mix) + strong_acc_bell * hover_mix
+        acc_bell += (
+            drag_bell_target - self.angle_bell
+        ) * 22.0 * drag_influence
         self.velocity_bell += acc_bell * dt
         self.angle_bell += self.velocity_bell * dt
 
@@ -848,13 +1050,20 @@ class FusionBall(QWidget):
             + self.hover_strength * 4.0 * math.sin(self.t * 9.2 + 0.3)
         ) + base_wind * 2.0
         strong_acc_taz = (strong_taz_target - self.angle_taz) * 40.0 - self.velocity_taz * 5.8 - acc_bell * 0.8
-        acc_taz = normal_acc_taz * (1.0 - self.hover_wind) + strong_acc_taz * self.hover_wind
+        acc_taz = normal_acc_taz * (1.0 - hover_mix) + strong_acc_taz * hover_mix
+        acc_taz += (
+            drag_taz_target - self.angle_taz
+        ) * 42.0 * tanzaku_air_influence
         self.velocity_taz += acc_taz * dt
         self.angle_taz += self.velocity_taz * dt
         self.angle_bell = max(-12.0, min(12.0, self.angle_bell))
-        self.angle_taz = max(-26.0, min(26.0, self.angle_taz))
+        self.angle_taz = max(-60.0, min(60.0, self.angle_taz))
 
-        clapper_target = self.angle_taz * 1.04 - self.angle_bell * 0.16
+        clapper_target = (
+            self.angle_taz * 1.04
+            - self.angle_bell * 0.16
+            + drag_clapper_target * clapper_air_influence
+        )
         acc_clapper = (
             (clapper_target - self.angle_clapper) * CLAPPER_SPRING
             - self.velocity_clapper * CLAPPER_DAMP
@@ -865,13 +1074,41 @@ class FusionBall(QWidget):
         self.angle_clapper, self.velocity_clapper, impact = resolve_clapper_collision(
             self.angle_clapper, self.velocity_clapper
         )
+        if impact > 0.0:
+            side = 1.0 if self.angle_clapper >= 0.0 else -1.0
+            self.velocity_clapper_spin += side * min(impact * 0.62, 34.0)
+        spin_drive = (
+            (self.velocity_taz - self.velocity_clapper) * 0.72
+            + drag_spin_drive * max(drag_influence, 0.18 if dragging else 0.0)
+        )
+        self.angle_clapper_spin, self.velocity_clapper_spin = _ORIGINAL_FENGLING.advance_clapper_spin(
+            self.angle_clapper_spin,
+            self.velocity_clapper_spin,
+            spin_drive,
+            dt,
+        )
+        # 纸片绕悬线飘转：风一吹就绕绳打转，跟独立版一致（可连续翻转 360°）。
+        paper_spin_drive = max(-110.0, min(
+            wind * 100.0
+            + (self.velocity_taz - self.velocity_clapper) * 0.5
+            + drag_spin_drive * drag_influence * 1.0,
+            110.0,
+        ))
+        self.angle_paper_spin, self.velocity_paper_spin = _ORIGINAL_FENGLING.advance_paper_spin(
+            self.angle_paper_spin,
+            self.velocity_paper_spin,
+            paper_spin_drive,
+            dt,
+        )
         self._sound_cooldown = max(0.0, self._sound_cooldown - dt)
-        # 送达响铃窗口内允许非悬停撞壁发声（铃舌由真实冲量驱动）；窗口外维持原规则。
-        chime_hovered = self.hovered
-        if time.monotonic() < self._delivery_ring_until:
-            chime_hovered = True
-        if should_attempt_chime(impact, chime_hovered, self._sound_cooldown):
-            self._play_chime(impact)
+        # 响铃资格：悬停气流、送达窗口、拖动中或刚松手的余势摆动，任一即可；
+        # 拖动轨迹以外的非悬停普通摆动维持原规则：悬停气流才响。
+        in_delivery_window = time.monotonic() < self._delivery_ring_until
+        chime_allowed, volume_scale = _ORIGINAL_FENGLING.resolve_chime_eligibility(
+            self.hovered, in_delivery_window, self._drag is not None, self._drag_chime_until
+        )
+        if should_attempt_chime(impact, chime_allowed, self._sound_cooldown):
+            self._play_chime(impact, volume_scale=volume_scale)
 
         # ── 解语花原版：枝条微风、按压弹簧、悬停碎瓣 ──
         flower_base_wind = (
@@ -927,7 +1164,13 @@ class FusionBall(QWidget):
 
     # ── 风铃绘制：保留原 bell.svg 原样，用程序绘制会动的连接件 ──
     def _draw_linkage(self, painter, clapper_angle, paper_angle):
-        top, clapper, knot = linkage_points(clapper_angle, paper_angle)
+        paper_offset_x = _ORIGINAL_FENGLING.tanzaku_airflow_offset(
+            self._drag_velocity_x, self._drag_velocity_y
+        )
+        paper_offset_y = _ORIGINAL_FENGLING.tanzaku_airflow_lift(self._drag_velocity_y)
+        top, clapper, knot = linkage_points(
+            clapper_angle, paper_angle, paper_offset_x, paper_offset_y
+        )
         rope_bend = (self.velocity_clapper - self.velocity_taz) * 0.42
         upper_control, lower_control = linkage_curve_controls(top, clapper, knot, rope_bend)
         pen = QPen(QColor("#8bbcac"), 1.7 * RENDER_SCALE)
@@ -938,21 +1181,31 @@ class FusionBall(QWidget):
         path.quadTo(upper_control, clapper)
         path.quadTo(lower_control, knot)
         painter.drawPath(path)
+        _ORIGINAL_FENGLING.draw_clapper_disc(
+            painter,
+            clapper,
+            self.angle_clapper_spin,
+            RENDER_SCALE,
+        )
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor("#fff4d4"))
-        painter.drawEllipse(clapper, CLAPPER_RX * RENDER_SCALE, CLAPPER_RY * RENDER_SCALE)
         painter.setBrush(QColor("#fff9ea"))
         painter.drawEllipse(knot, 4.5 * RENDER_SCALE, 4.5 * RENDER_SCALE)
 
     def _draw_paper(self, painter, paper_angle, clapper_angle):
-        _top, _clapper, knot = linkage_points(clapper_angle, paper_angle)
-        px, py = PAPER_PIVOT
+        paper_offset_x = _ORIGINAL_FENGLING.tanzaku_airflow_offset(
+            self._drag_velocity_x, self._drag_velocity_y
+        )
+        paper_offset_y = _ORIGINAL_FENGLING.tanzaku_airflow_lift(self._drag_velocity_y)
+        _top, _clapper, knot = linkage_points(
+            clapper_angle, paper_angle, paper_offset_x, paper_offset_y
+        )
+        wx, roll = _ORIGINAL_FENGLING.paper_twist_projection(self.angle_paper_spin)
         painter.save()
-        painter.translate(knot.x() - px, knot.y() - py)
-        painter.translate(px, py)
+        painter.translate(knot.x(), knot.y())
         painter.rotate(paper_angle)
-        painter.translate(-px, -py)
-        painter.drawPixmap(0, 0, self.pix_taz)
+        painter.scale(wx, 1.0)
+        painter.rotate(roll)
+        _ORIGINAL_FENGLING.draw_tanzaku_paper(painter, self.angle_paper_spin, RENDER_SCALE)
         painter.restore()
 
     @property
@@ -1006,7 +1259,12 @@ class FusionBall(QWidget):
         branch_offset, _flower_offset, _leaf_offset = component_motion(
             self.t, self.bloom, effective_gust, effective_direction, rebound
         )
-        return self.angle * 0.42 + branch_offset * 0.55 + self.press_amount * 4.8
+        return (
+            self.angle * 0.42
+            + branch_offset * 0.55
+            + self.press_amount * 4.8
+            + self.drag_branch_angle
+        )
 
     def _scene_branch_angle(self):
         return BRANCH_BASE_ANGLE + self._branch_angle()
@@ -1031,7 +1289,7 @@ class FusionBall(QWidget):
         _branch_offset, flower_offset, leaf_offset = component_motion(
             self.t, self.bloom, effective_gust, effective_direction, rebound
         )
-        vertical_offset = self.cursor_lift * 2.8 * motion_scale
+        vertical_offset = self.cursor_lift * 2.8 * motion_scale + self.drag_vertical
         lift = -0.45 * math.sin(self.t * 1.05)
         branch_angle = self._scene_branch_angle()
 
@@ -1046,7 +1304,7 @@ class FusionBall(QWidget):
             LEAF_SIZE,
             LEAF_CX,
             LEAF_CY + lift * 0.35 + vertical_offset * 0.45,
-            leaf_offset,
+            leaf_offset + self.drag_leaf_angle,
         )
         if self.pix_flower.isNull():
             self._draw_fallback_flower(
@@ -1054,7 +1312,7 @@ class FusionBall(QWidget):
                 FLOWER_CX,
                 FLOWER_CY + lift + vertical_offset,
                 FLOWER_SIZE / 47.0,
-                FLOWER_ANGLE + flower_offset,
+                FLOWER_ANGLE + flower_offset + self.drag_flower_angle,
             )
         else:
             self._draw_layer(
@@ -1063,7 +1321,7 @@ class FusionBall(QWidget):
                 FLOWER_SIZE,
                 FLOWER_CX,
                 FLOWER_CY + lift + vertical_offset,
-                FLOWER_ANGLE + flower_offset,
+                FLOWER_ANGLE + flower_offset + self.drag_flower_angle,
             )
         painter.restore()
 
@@ -1209,6 +1467,9 @@ class FusionBall(QWidget):
         direction = 1.0 if self.angle_bell <= 0 else -1.0
         self.velocity_bell += 5.5 * direction
         self.velocity_taz -= 11.0 * direction
+        clapper_direction = 1.0 if self.angle_clapper <= 0 else -1.0
+        self.velocity_clapper += _ORIGINAL_FENGLING.CLICK_CLAPPER_KICK * clapper_direction
+        self.velocity_clapper_spin += _ORIGINAL_FENGLING.CLICK_CLAPPER_KICK * 0.22 * clapper_direction
 
     def _end_press_effect(self):
         if not self.pressed:
@@ -1228,6 +1489,7 @@ class FusionBall(QWidget):
             self._drag = self._press_global - self.pos()
             self._drag_ball_start = self.pos()
             self._moved = False
+            self._reset_drag_motion()
             self._press_flower = point_in_flower_interaction_zone(
                 scene_x, scene_y, HOVER_EXIT_MARGIN
             )
@@ -1247,6 +1509,9 @@ class FusionBall(QWidget):
                 direction = 1.0 if self.angle_bell <= 0 else -1.0
                 self.velocity_bell += 5.5 * direction
                 self.velocity_taz -= 11.0 * direction
+                clapper_direction = 1.0 if self.angle_clapper <= 0 else -1.0
+                self.velocity_clapper += _ORIGINAL_FENGLING.CLICK_CLAPPER_KICK * clapper_direction
+                self.velocity_clapper_spin += _ORIGINAL_FENGLING.CLICK_CLAPPER_KICK * 0.22 * clapper_direction
         event.accept()
 
     def mouseMoveEvent(self, event):
@@ -1257,15 +1522,18 @@ class FusionBall(QWidget):
                     event.accept()
                     return
                 self._moved = True
+                self._cancel_press_for_drag()
             delta = current - self._press_global
             if self._drag_read_was_visible and self.read_panel is not None:
                 self._sync_dragged_read_panel(delta)
             else:
                 self.move(current - self._drag)
+                self._snap()
                 if self._drag_menu_was_visible and self.menu is not None:
                     self.menu.move_to_ball()
             if self.context_menu is not None and self.context_menu.isVisible():
                 self.context_menu.move_to_ball()
+            self._record_drag_motion()
         event.accept()
 
     def mouseReleaseEvent(self, event):
@@ -1273,6 +1541,7 @@ class FusionBall(QWidget):
             if self._press_flower:
                 self._end_press_effect()
             if self._moved:
+                self._release_drag_motion()
                 self._snap()
                 if self._drag_read_was_visible and self.read_panel is not None:
                     self._sync_dragged_read_panel()
@@ -1286,7 +1555,10 @@ class FusionBall(QWidget):
                 self.menu.close_once()
             else:
                 self._toggle_menu()
+            if not self._moved:
+                self._drag_motion_active = False
             self._drag = None
+            self._drag_chime_until = time.monotonic() + DRAG_CHIME_WINDOW_S  # 松开后余势摆动仍可响
             self._press_global = None
             self._press_flower = False
             self._drag_menu_was_visible = False
@@ -1343,36 +1615,52 @@ class FusionBall(QWidget):
             print(f"[融合球] 生成碰撞音色失败: {error}", file=sys.stderr)
 
     def _init_sound_voices(self):
-        if QSoundEffect is None:
+        self._sound_voice_paths = []
+        if QSoundEffect is None or not self._chime_pool:
             return
         try:
-            self._sound_voices = [QSoundEffect(self) for _ in range(CHIME_VOICE_COUNT)]
+            for index in range(CHIME_VOICE_COUNT):
+                voice = QSoundEffect(self)
+                source_path = prepare_sound_file(
+                    self._chime_pool[index % len(self._chime_pool)], 1.0
+                )
+                voice.setSource(QUrl.fromLocalFile(source_path))
+                voice.setVolume(1.0)
+                self._sound_voices.append(voice)
+                self._sound_voice_paths.append(source_path)
         except Exception as error:
             self._sound_voices = []
-            print(f"[融合球] 初始化重叠播放失败: {error}", file=sys.stderr)
+            self._sound_voice_paths = []
+            print(f"[融合球] 初始化重叠播放失败，改用系统播放: {error}", file=sys.stderr)
 
-    def _play_chime(self, impact):
+    def _play_chime(self, impact, volume_scale=1.0):
         if self.sound_volume <= 0 or self._sound_cooldown > 0 or not self._chime_pool:
             return
-        volume = chime_volume_from_impact(impact, self.sound_volume)
+        volume = chime_volume_from_impact(impact, self.sound_volume) * volume_scale
         index = random.randint(0, len(self._chime_pool) - 1)
         if len(self._chime_pool) > 1:
             while index == self._last_chime_idx:
                 index = random.randint(0, len(self._chime_pool) - 1)
         self._last_chime_idx = index
+        data = self._chime_pool[index]
         self._sound_cooldown = CHIME_COOLDOWN
         try:
-            path = prepare_sound_file(self._chime_pool[index], volume)
             if self._sound_voices:
                 voice = next((item for item in self._sound_voices if not item.isPlaying()), None)
                 if voice is None:
                     voice = self._sound_voices[self._sound_voice_index % len(self._sound_voices)]
                 self._sound_voice_index = (self._sound_voice_index + 1) % len(self._sound_voices)
-                voice.setSource(QUrl.fromLocalFile(path))
-                voice.setVolume(1.0)
-                voice.play()
-                return
+                if (
+                    QSoundEffect is None
+                    or not isinstance(voice, QSoundEffect)
+                    or voice.status() == QSoundEffect.Status.Ready
+                ):
+                    voice.setVolume(volume)
+                    voice.play()
+                    return
+                # QSoundEffect 仍在 Loading/Error 时不能静默吞掉这一下，落到 winsound 文件播放。
             if winsound is not None:
+                path = prepare_sound_file(data, volume)
                 winsound.PlaySound(
                     path,
                     winsound.SND_FILENAME | winsound.SND_ASYNC | winsound.SND_NODEFAULT,
@@ -1390,6 +1678,7 @@ class FusionBall(QWidget):
     def _delivery_kick(self, strength):
         self._sound_cooldown = 0.0
         self.velocity_clapper += strength
+        self.velocity_clapper_spin += strength * 0.22
 
     def _poll_hearts_async(self):
         if self._heart_polling:

@@ -39,7 +39,7 @@ except ImportError:
 from PyQt6.QtCore import Qt, QTimer, QPoint, QPointF, QUrl, pyqtSignal, QPropertyAnimation
 from PyQt6.QtGui import (
     QPixmap, QPainter, QPainterPath, QPen, QColor,
-    QFont, QFontMetrics, QCursor,
+    QFont, QFontMetrics, QCursor, QLinearGradient,
 )
 from PyQt6.QtSvg import QSvgRenderer
 from PyQt6.QtWidgets import (
@@ -69,11 +69,36 @@ RENDER_SCALE = 3         # 高清渲染倍率，缩放后保留瓷面细节
 BELL_PIVOT = (200 * RENDER_SCALE, 36 * RENDER_SCALE)
 PAPER_PIVOT = (200 * RENDER_SCALE, 246 * RENDER_SCALE)
 LINK_TOP = (200 * RENDER_SCALE, 112 * RENDER_SCALE)
-CLAPPER_LENGTH = 74 * RENDER_SCALE   # 铃舌中心停在铃口平面附近：上部在铃内碰壁、下部探出可见
-CLAPPER_RX = 14                      # 铃舌椭圆半径（SVG 坐标），约为铃口宽度一半，小尺寸下仍明显
-CLAPPER_RY = 11
+CLAPPER_LENGTH = 74 * RENDER_SCALE   # 铃舌中心停在铃口平面附近：上半在铃内碰壁、下半只探出一点（跟以前一致，不露肚皮）
+CLAPPER_RX = 16                      # 黄色铃舌略放大，最终尺寸下仍只露一小截
+CLAPPER_RY = 13
+CLAPPER_DRAW_DROP = 0.0   # 绘制回到物理挂点：黄色铃舌只从铃口露出一点，物理碰撞点不变
+CLICK_CLAPPER_KICK = 64.0  # 鼠标轻点给铃舌一个短促冲量，确保点击也能听到一声
 PAPER_LINE_LENGTH = 60 * RENDER_SCALE
-CLAPPER_LIMIT = 12.0     # 铃舌椭圆边缘碰到铃口内沿时的相对角度（随铃舌尺寸标定）
+CLAPPER_LIMIT = 11.0     # 放大后的铃舌更早接触铃口，碰壁频率随几何同步提高
+# 拖动物理只吃窗口真实位移，不直接吃鼠标坐标；这样面板联合限位或贴边后不会继续凭空加速。
+DRAG_MAX_SPEED = 2400.0
+DRAG_FILTER_TAU = 0.035
+DRAG_STALE_AFTER = 0.055
+DRAG_DECAY_TAU = 0.20   # 拖速衰减更慢：松手后惯性多留一瞬，甩出去有荡回来的余势
+# 拖动风感：短册和铃舌看到的是与窗口运动相反的相对风（全矢量）。
+# 风大小随拖速平滑增强：慢拖近乎跟手（没有风就不该被吹走），快拖把悬挂件
+# 压向反方向；斜拖/竖拖的垂直分量折算进风速，并让纸片被上升气流吹起。
+# 松手后风目标随拖速衰减，悬挂件靠阻尼自然回摆，形成「被风吹过又荡回来」的余势。
+TANZAKU_AIR_FULL_SPEED = 480.0  # 达到此速度视为完整强风（更早顶格，中速就猛）
+TANZAKU_AIR_MAX_ANGLE = 55.0    # 快拖时短册被压到大偏角（配合限位放开，能看见明显飞起）
+TANZAKU_AIR_RESPONSE_SPEED = 75.0
+TANZAKU_AIR_OFFSET_MIN = 10.0   # 慢拖几乎不偏：没有风就不该被吹走
+TANZAKU_AIR_OFFSET_MAX = 210.0  # 快拖时约 57px 屏幕位移，绳弧明显拉开
+TANZAKU_AIR_LIFT_MAX = 90.0     # 向下拖时纸片被上升相对气流吹起（SVG 像素）
+TANZAKU_AIR_LIFT_SPEED = 340.0  # 达到此竖直拖速视为完整上浮
+CLAPPER_AIR_FULL_SPEED = 560.0
+CLAPPER_AIR_MAX_ANGLE = 13.0    # 快拖时铃舌被风压向铃口一侧（贴壁但不越壁狂响）
+CLAPPER_AIR_RESPONSE_SPEED = 90.0
+CLAPPER_SPIN_DAMP = 2.2
+CLAPPER_SPIN_CENTER = 3.0   # 铃舌轻微回正即可，不硬拽
+PAPER_SPIN_DAMP = 0.9
+PAPER_SPIN_CENTER = 2.0
 EDGE_INSET = 16          # 贴边仍留出可见余量，兼容远程缩放与 DPI 变化
 MIN_WIND_STRENGTH = 0.62 # 慢慢靠近时仍有清楚但克制的风
 MAX_WIND_STRENGTH = 1.45 # 快速掠过时增强阵风，避免无限放大
@@ -82,10 +107,12 @@ CHIME_UPPER_ZONE = (36, 22, 72, 58)   # 单铃铃身与挂绳的可见范围
 CHIME_LOWER_ZONE = (40, 50, 70, 92)   # 铃舌与摆动短册的可见范围
 HOVER_EXIT_MARGIN = 8                # 离开判定略宽于进入区，保留滞回
 HOVER_LEAVE_DELAY = 0.24             # 光标明确离开一小会儿后才散风
-CLAPPER_SPRING = 20.0  # 铃舌牵引强度：悬停强风下高频撞壁，触发率跟上切片时长避免断点
-CLAPPER_DAMP = 3.2     # 铃舌阻尼：更低，摆动更活跃；冷却+能量门槛仍防噪音化连击
+CLAPPER_SPRING = 7.5  # 铃舌牵引放软：更重更滞后，追不上短册，形成被风拖着的飘
+CLAPPER_DAMP = 2.8    # 铃舌阻尼稍强：快拖后有明显回摆余势，不抖不飘忽
 CHIME_MIN_IMPACT = 7.0  # 铃舌向外撞壁的速度阈值（度/秒），轻碰也响
 CHIME_COOLDOWN = 0.10    # 两次响铃最小间隔：防同一次反弹连击，允许更高响应密度
+DRAG_CHIME_WINDOW_S = 1.0    # 拖动结束后的余势响铃窗口：期内非悬停撞壁也出声，画面声音同步
+HOVERLESS_CHIME_VOLUME = 0.7 # 非悬停响铃音量倍率：悬停/送达为 1.0，余势轻轻一点
 # 送达响铃：给铃舌的真实晃动冲量（度/秒）。从静止施加后必然越过铃口限位撞壁，
 # 由撞击触发 _play_chime，音量随撞击力度走（因动而声），不再单独播 WAV。
 # 三次交替 kick 对应三声，力度逐次衰减模拟风铃被风吹动的自然收势。
@@ -173,6 +200,393 @@ def calculate_entry_wind(previous_x, previous_y, current_x, current_y, elapsed, 
     return source_direction, speed, wind_strength_from_speed(speed)
 
 
+def sample_drag_velocity(
+    previous_x,
+    previous_y,
+    previous_ts,
+    previous_vx,
+    previous_vy,
+    current_x,
+    current_y,
+    current_ts,
+):
+    """从窗口真实位移估算平滑拖速，并给出本帧速度变化量。
+
+    速度做矢量限幅，避免系统偶发合并鼠标事件时把一个大跳点放大成抽搐；
+    首帧提高跟手权重，后续再用短时间常数滤掉事件间隔抖动。
+    """
+    elapsed = max(float(current_ts) - float(previous_ts), 1.0 / 240.0)
+    raw_vx = (float(current_x) - float(previous_x)) / elapsed
+    raw_vy = (float(current_y) - float(previous_y)) / elapsed
+    raw_speed = math.hypot(raw_vx, raw_vy)
+    if raw_speed > DRAG_MAX_SPEED:
+        scale = DRAG_MAX_SPEED / raw_speed
+        raw_vx *= scale
+        raw_vy *= scale
+    alpha = 1.0 - math.exp(-min(elapsed, 0.12) / DRAG_FILTER_TAU)
+    if math.hypot(float(previous_vx), float(previous_vy)) < 1.0:
+        alpha = max(alpha, 0.62)
+    vx = float(previous_vx) + (raw_vx - float(previous_vx)) * alpha
+    vy = float(previous_vy) + (raw_vy - float(previous_vy)) * alpha
+    return vx, vy, vx - float(previous_vx), vy - float(previous_vy), math.hypot(vx, vy)
+
+
+def _reverse_airflow_value(
+    velocity_x, velocity_y, full_speed, max_value, min_value=0.0
+):
+    """全矢量相对风：风速大小决定风力（平滑平方），水平方向决定吹向哪边。
+
+    垂直分量按 0.6 折算进风速感受：斜拖/竖拖风力更大，但纯垂直拖动
+    （vx≈0）不会把纸片吹横，只走上浮通道（tanzaku_airflow_lift）。
+    """
+    vx = float(velocity_x)
+    speed = math.hypot(vx, float(velocity_y) * 0.6)
+    if speed < 1e-6 or abs(vx) < 1e-6:
+        return 0.0
+    ratio = max(0.0, min(speed / float(full_speed), 1.0))
+    strength = ratio * ratio * (3.0 - 2.0 * ratio)
+    value = float(min_value) + (float(max_value) - float(min_value)) * strength
+    return -math.copysign(value, vx)
+
+
+def _reverse_airflow_target(velocity_x, velocity_y, full_speed, max_angle):
+    return _reverse_airflow_value(velocity_x, velocity_y, full_speed, max_angle)
+
+
+def _airflow_influence(velocity_x, velocity_y, response_speed):
+    speed = math.hypot(float(velocity_x), float(velocity_y) * 0.6)
+    return max(0.0, min(speed / float(response_speed), 1.0))
+
+
+def _paper_airflow_target(velocity_x, velocity_y, full_speed, max_angle):
+    """纸片倾斜风角，符号与结点位移方向相反。
+
+    几何勾稽（PyQt6 实测）：painter.rotate(+θ) 是视觉逆时针，纸片底部
+    （局部 y 正方向）会向左倾。右拖（vx>0）时相对风向向左，纸片应向左倾 →
+    需要正角 → +copysign。结点位移（tanzaku_airflow_offset 的 -copysign）
+    让结点向左，两者方向一致，才是整体被风吹向反方向。
+    """
+    vx = float(velocity_x)
+    speed = math.hypot(vx, float(velocity_y) * 0.6)
+    if speed < 1e-6 or abs(vx) < 1e-6:
+        return 0.0
+    ratio = max(0.0, min(speed / float(full_speed), 1.0))
+    strength = ratio * ratio * (3.0 - 2.0 * ratio)
+    value = float(max_angle) * strength
+    return math.copysign(value, vx)
+
+
+def tanzaku_airflow_target(velocity_x, velocity_y=0.0):
+    """把拖动速度换成短册的反向相对风倾斜角；短册是最明显的迎风面。"""
+    return _paper_airflow_target(
+        velocity_x, velocity_y, TANZAKU_AIR_FULL_SPEED, TANZAKU_AIR_MAX_ANGLE
+    )
+
+
+def tanzaku_airflow_influence(velocity_x, velocity_y=0.0):
+    """让短册在普通拖速下就开始持续偏向拖动反方向。"""
+    return _airflow_influence(velocity_x, velocity_y, TANZAKU_AIR_RESPONSE_SPEED)
+
+
+def tanzaku_airflow_offset(velocity_x, velocity_y=0.0):
+    """给短册结点一个可见的反向风偏移，避免只靠小角度旋转看不出被吹走。"""
+    return _reverse_airflow_value(
+        velocity_x,
+        velocity_y,
+        TANZAKU_AIR_FULL_SPEED,
+        TANZAKU_AIR_OFFSET_MAX,
+        TANZAKU_AIR_OFFSET_MIN,
+    )
+
+
+def tanzaku_airflow_lift(velocity_y):
+    """向下拖动时纸片被上升相对气流吹起（返回负值=上浮）；向上拖不压下。
+
+    风是相对运动产生的：窗口向下移，纸片看到的风从下方来，把它往上托。
+    向上的相对风被重力抵消，不专门做下沉。
+    """
+    vy = float(velocity_y)
+    if vy <= 1e-6:
+        return 0.0
+    ratio = max(0.0, min(vy / TANZAKU_AIR_LIFT_SPEED, 1.0))
+    strength = ratio * ratio * (3.0 - 2.0 * ratio)
+    return -TANZAKU_AIR_LIFT_MAX * strength
+
+
+def clapper_airflow_target(velocity_x, velocity_y=0.0):
+    """把拖动速度换成铃舌的反向相对风目标角。"""
+    return _reverse_airflow_target(
+        velocity_x, velocity_y, CLAPPER_AIR_FULL_SPEED, CLAPPER_AIR_MAX_ANGLE
+    )
+
+
+def clapper_airflow_influence(velocity_x, velocity_y=0.0):
+    """让铃舌的反向风感在普通拖速下就接近完整，不等铃身高速才出现。"""
+    return _airflow_influence(velocity_x, velocity_y, CLAPPER_AIR_RESPONSE_SPEED)
+
+
+def wind_chime_drag_targets(velocity_x, velocity_y):
+    """把拖动速度翻译成悬挂件目标：铃身轻微逆风，短册和铃舌吃全矢量反向相对风。"""
+    vx = float(velocity_x)
+    vy = float(velocity_y)
+    bell = max(-10.5, min(-vx * 0.011, 10.5))
+    paper = tanzaku_airflow_target(vx, vy)
+    clapper = clapper_airflow_target(vx, vy)
+    spin_drive = max(-105.0, min(vx * 0.036 + vy * 0.044, 105.0))
+    return bell, paper, clapper, spin_drive
+
+
+def wind_chime_drag_impulses(delta_vx, delta_vy):
+    """加速、急停与反向时的瞬时惯性；符号与窗口运动相反，释放后会越过重心。"""
+    dvx = float(delta_vx)
+    dvy = float(delta_vy)
+    return (
+        max(-26.0, min(-dvx * 0.034, 26.0)),
+        max(-52.0, min(-dvx * 0.066, 52.0)),
+        max(-48.0, min(-dvx * 0.050 + dvy * 0.022, 48.0)),
+        max(-120.0, min(dvx * 0.13 + dvy * 0.10, 120.0)),
+    )
+
+
+def advance_clapper_spin(angle, velocity, drive, dt):
+    """铃舌绕悬线的扭转：有惯性、弱回正，可被下一次拖动连续打断。"""
+    dt = max(0.0, min(float(dt), 0.05))
+    acceleration = (
+        float(drive) * 1.18
+        - float(velocity) * CLAPPER_SPIN_DAMP
+        - math.sin(math.radians(float(angle))) * CLAPPER_SPIN_CENTER
+    )
+    velocity = float(velocity) + acceleration * dt
+    angle = float(angle) + velocity * dt
+    angle = (angle + 180.0) % 360.0 - 180.0
+    if abs(angle) < 0.01 and abs(velocity) < 0.02 and abs(float(drive)) < 0.02:
+        return 0.0, 0.0
+    return angle, velocity
+
+
+def clapper_disc_projection(spin_angle):
+    """把绕竖轴自转投影到二维：正面最宽，侧面收窄，亮边随朝向换侧。"""
+    radians = math.radians(float(spin_angle))
+    facing = math.cos(radians)
+    width_scale = 0.72 + 0.28 * abs(facing)
+    roll = math.sin(radians) * 6.0    # 铃舌保持圆润，只轻微侧倾不压扁
+    highlight = -0.58 * facing        # 高光随朝向扫过，读得出"自己在转"
+    return width_scale, roll, highlight
+
+
+def advance_paper_spin(angle, velocity, drive, dt):
+    """纸片绕悬线的飘转：惯性小，被风带起后能连续翻转一整圈（360°），
+    弱回正（停止驱动后慢慢飘回正面）。"""
+    dt = max(0.0, min(float(dt), 0.05))
+    acceleration = (
+        float(drive) * 1.0
+        - float(velocity) * PAPER_SPIN_DAMP
+        - math.sin(math.radians(float(angle))) * PAPER_SPIN_CENTER
+    )
+    velocity = float(velocity) + acceleration * dt
+    angle = float(angle) + velocity * dt
+    angle = (angle + 180.0) % 360.0 - 180.0
+    if abs(angle) < 0.01 and abs(velocity) < 0.02 and abs(float(drive)) < 0.02:
+        return 0.0, 0.0
+    return angle, velocity
+
+
+def paper_twist_projection(twist_angle):
+    """把纸片绕竖轴偏转投影成二维：正面全宽，转侧面时收窄并侧倾（可读翻转）。"""
+    radians = math.radians(float(twist_angle))
+    facing = math.cos(radians)
+    width_scale = 0.20 + 0.80 * abs(facing)
+    roll = math.sin(radians) * 6.0
+    return width_scale, roll
+
+
+def draw_tanzaku_paper(painter, spin_angle, scale=RENDER_SCALE,
+                       front=None, back=None):
+    """程序化绘制短册（铃舌/红色竖条）：正面亮粉、背面淡紫，两面都明亮，
+    靠色相+花纹区分；纸片带一点「拧」——下段比上段慢半拍，转起来有麻花扭转感，
+    侧面画 S 形弧线像纸片弯面的剖面。front/back 为
+    (渐变顶色, 渐变底色, 描边色, 纹路色, 折痕色) 元组，不传用默认。
+    挂点（knot 珠下缘）为原点。原版与融合版共用。"""
+    if front is None:
+        front = ("#f9c7d2", "#e895aa", "#c9788f", "#d88198", "#e88aa3")
+    if back is None:
+        back = ("#e3d5f5", "#cfb4e8", "#b59cd4", "#bda5d8", "#c4aede")
+    front_top, front_bot, front_edge, front_mark, front_crease = front
+    back_top, back_bot, back_edge, back_mark, back_crease = back
+
+    TWIST_LAG = 26.0          # 底部相对顶部滞后的拧角（麻花感的来源）
+    radians = math.radians(float(spin_angle))
+    top_facing = math.cos(radians)
+    bot_facing = math.cos(math.radians(float(spin_angle) - TWIST_LAG))
+    top_back = top_facing < 0.0
+    bot_back = bot_facing < 0.0
+    fade = 0.66 + 0.34 * abs(top_facing)
+    near_side = abs(top_facing) < 0.15     # 真·正侧面才画 S 弧；拧的过渡留给渐变体
+
+    half_w = 14.0 * scale           # 顶部半宽（整体稍收，不矮胖）
+    # 拧的宽度差：下段按底部朝向的相对投影宽度，翻面中途下段宽一点点（不靠分色表达拧）
+    main_ws = 0.20 + 0.80 * abs(top_facing)
+    bot_ws = 0.20 + 0.80 * abs(bot_facing)
+    w_ratio = max(0.55, min(bot_ws / max(main_ws, 0.001), 1.35))
+    half_w_bot = half_w * w_ratio   # 底部半宽（随拧动态，上窄下宽有收束感）
+    mid_w = (half_w + half_w_bot) * 0.5
+    top_y = 4.5 * scale             # 紧贴 knot 珠下缘，消除断开缝隙
+    body_h = 60.0 * scale           # 拉长：主体到 60
+    v_deep = 70.0 * scale           # V 剪口底
+    v_mid = 63.0 * scale            # V 剪口中凹
+    mid_y = (top_y + body_h) * 0.5
+
+    painter.save()
+    painter.setOpacity(fade)
+
+    if near_side:
+        # 正侧面：S 形双弧线（上段弯向一侧、下段弯回），麻花拧的剖面，弧度大且够粗
+        painter.setOpacity(0.82)
+        arc_bend = math.sin(radians) * 6.0 * scale
+        arc_col = back_edge if top_back else front_edge
+        pen = QPen(QColor(arc_col), 6.5 * scale)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        arc = QPainterPath(QPointF(0.0, top_y))
+        arc.quadTo(
+            QPointF(arc_bend, (top_y + v_mid) * 0.33),
+            QPointF(arc_bend * 0.62, (top_y + v_mid) * 0.5),
+        )
+        arc.quadTo(
+            QPointF(-arc_bend * 0.45, (top_y + v_mid) * 0.74),
+            QPointF(0.0, v_mid),
+        )
+        painter.drawPath(arc)
+        painter.restore()
+        return
+
+    # 主体形状：顶部半宽 half_w → 底部半宽 half_w_bot，侧边微鼓（拉长后的瘦长轮廓）
+    path = QPainterPath()
+    path.moveTo(-half_w * 0.94, top_y)
+    path.quadTo(0.0, top_y - 3.0 * scale, half_w * 0.94, top_y)
+    path.quadTo(mid_w * 1.05, mid_y, half_w_bot * 0.96, body_h)
+    path.lineTo(half_w_bot * 0.5, v_deep)
+    path.lineTo(0.0, v_mid)
+    path.lineTo(-half_w_bot * 0.5, v_deep)
+    path.lineTo(-half_w_bot * 0.96, body_h)
+    path.quadTo(-mid_w * 1.05, mid_y, -half_w * 0.94, top_y)
+    path.closeSubpath()
+
+    # 整片按主朝向配色：正面整片粉、背面整片淡紫，不做上下分色（小尺寸下分色像渲染 bug）
+    top_col = (back_top, back_bot) if top_back else (front_top, front_bot)
+    grad = QLinearGradient(0.0, top_y, 0.0, v_deep)
+    grad.setColorAt(0.0, QColor(top_col[0]))
+    grad.setColorAt(1.0, QColor(top_col[1]))
+
+    pen = QPen(QColor(back_edge if top_back else front_edge), 1.6 * scale)
+    pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+    painter.setPen(pen)
+    painter.setBrush(grad)
+    painter.drawPath(path)
+
+    # 折痕中线：随拧的方向斜着走（麻花中线）
+    crease_x = (bot_facing - top_facing) * half_w * 0.30
+    crease_pen = QPen(QColor(back_crease if top_back else front_crease), 0.8 * scale)
+    crease_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+    painter.setPen(crease_pen)
+    crease = QPainterPath(QPointF(0.0, top_y + 7.0 * scale))
+    crease.quadTo(
+        QPointF(crease_x * 0.5, mid_y),
+        QPointF(crease_x, body_h - 5.0 * scale),
+    )
+    painter.drawPath(crease)
+
+    # 高光斜线：顶部高光在 A 侧、底部随拧移到另一侧（螺旋光）
+    hl_x1 = -top_facing * half_w * 0.42
+    hl_x2 = -bot_facing * half_w * 0.42
+    hl_pen = QPen(QColor(255, 245, 247, 190), (1.9 if not top_back else 1.2) * scale)
+    hl_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+    painter.setPen(hl_pen)
+    hl = QPainterPath(QPointF(hl_x1, top_y + 4.0 * scale))
+    hl.quadTo(
+        QPointF((hl_x1 + hl_x2) * 0.5 * 1.1, mid_y),
+        QPointF(hl_x2 * 0.92, body_h - 8.0 * scale),
+    )
+    painter.drawPath(hl)
+
+    # 花纹：正面两条波浪、背面两条横纹（位置随拉长下移）
+    if top_back:
+        painter.setPen(QPen(QColor(back_mark), 1.0 * scale))
+        painter.drawLine(
+            QPointF(-3.5 * scale, 26.0 * scale),
+            QPointF(3.5 * scale, 26.0 * scale),
+        )
+        painter.drawLine(
+            QPointF(-3.0 * scale, 34.0 * scale),
+            QPointF(3.0 * scale, 34.0 * scale),
+        )
+    else:
+        painter.setPen(QPen(QColor(front_mark), 1.0 * scale))
+        wave = QPainterPath(QPointF(-4.0 * scale, 21.0 * scale))
+        wave.quadTo(QPointF(0.0, 18.0 * scale), QPointF(4.0 * scale, 21.0 * scale))
+        wave.moveTo(-5.0 * scale, 30.0 * scale)
+        wave.quadTo(QPointF(0.0, 27.0 * scale), QPointF(5.0 * scale, 30.0 * scale))
+        painter.drawPath(wave)
+
+    # 顶部小绳结：衔接上方 knot 白珠，堵住断开缝隙
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(QColor("#fff3d9"))
+    painter.drawEllipse(QPointF(0.0, top_y - 1.5 * scale), 1.35 * scale, 1.35 * scale)
+
+    painter.restore()
+
+
+def draw_clapper_disc(painter, center, spin_angle, scale=RENDER_SCALE):
+    """绘制带外沿、内面与移动高光的薄片铃舌；原版与融合版共用。
+    中心相对物理点下移 CLAPPER_DRAW_DROP，让 cream 从铃口探出更多、绳头接进片内。"""
+    width_scale, roll, highlight = clapper_disc_projection(spin_angle)
+    rx = max(2.4 * scale, CLAPPER_RX * scale * width_scale)
+    ry = CLAPPER_RY * scale
+    painter.save()
+    painter.translate(center)
+    painter.translate(0.0, CLAPPER_DRAW_DROP * scale)
+    painter.rotate(roll)
+
+    shadow = QColor(69, 117, 104, 48)
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(shadow)
+    painter.drawEllipse(QPointF(0.7 * scale, 1.3 * scale), rx, ry)
+
+    rim_pen = QPen(QColor("#6cae9b"), 1.45 * scale)
+    rim_pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+    painter.setPen(rim_pen)
+    painter.setBrush(QColor("#f7e7b7"))
+    painter.drawEllipse(QPointF(0.0, 0.0), rx, ry)
+
+    inner_pen = QPen(QColor("#fffaf0"), 0.75 * scale)
+    painter.setPen(inner_pen)
+    painter.setBrush(QColor("#fff3cf"))
+    painter.drawEllipse(QPointF(0.0, -0.35 * scale), rx * 0.72, ry * 0.68)
+
+    highlight_x = rx * highlight
+    shine_pen = QPen(QColor(255, 255, 255, 205), 0.95 * scale)
+    shine_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+    painter.setPen(shine_pen)
+    painter.drawLine(
+        QPointF(highlight_x, -ry * 0.48),
+        QPointF(highlight_x * 0.72, ry * 0.28),
+    )
+    # 反侧保留一枚薄荷色方向纹：小尺寸下它比纯亮斑更能让人读出“自己在转”。
+    marker_x = -highlight_x * 0.82
+    marker_pen = QPen(QColor("#4f8f7d"), 2.8 * scale)
+    marker_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+    painter.setPen(marker_pen)
+    painter.drawLine(
+        QPointF(marker_x, -ry * 0.20),
+        QPointF(marker_x * 0.78, ry * 0.36),
+    )
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(QColor("#d99a4e"))
+    painter.drawEllipse(QPointF(0.0, 0.0), 1.35 * scale, 1.35 * scale)
+    painter.restore()
+
+
 def point_in_chime_zone(x, y, margin=0):
     """命中三铃上半部或铃舌短册下半部，忽略透明窗口四角。"""
     for left, top, right, bottom in (CHIME_UPPER_ZONE, CHIME_LOWER_ZONE):
@@ -215,6 +629,19 @@ def should_attempt_chime(impact, hovered, cooldown=0.0, min_impact=CHIME_MIN_IMP
     return bool(hovered and cooldown <= 0.0 and impact >= min_impact)
 
 
+def resolve_chime_eligibility(hovered, in_delivery_window, dragging, drag_chime_until, now=None):
+    """合并响铃资格：悬停气流、送达窗口、拖动中或刚松手的余势摆动，任一即可。
+
+    返回 (允许响铃, 音量倍率)：非悬停且非送达的余势响铃音量压低，
+    让"你正逗它"的悬停时刻更突出，同时画面与声音保持同步。
+    """
+    now = time.monotonic if now is None else now
+    in_drag_window = dragging or now() < drag_chime_until
+    allowed = hovered or in_delivery_window or in_drag_window
+    volume_scale = 1.0 if (hovered or in_delivery_window) else HOVERLESS_CHIME_VOLUME
+    return allowed, volume_scale
+
+
 def chime_volume_from_impact(impact, base, min_impact=CHIME_MIN_IMPACT):
     """撞击越重越响：刚过门槛时约 55% 主音量，40 度/秒以上顶满。"""
     if impact <= min_impact:
@@ -223,8 +650,13 @@ def chime_volume_from_impact(impact, base, min_impact=CHIME_MIN_IMPACT):
     return base * (0.55 + 0.45 * strength)
 
 
-def linkage_points(clapper_angle, paper_angle):
-    """计算铃内挂点、铃舌和短册结点；角度单位为度，坐标为高清 SVG 像素。"""
+def linkage_points(
+    clapper_angle, paper_angle, paper_offset_x=0.0, paper_offset_y=0.0
+):
+    """计算铃内挂点、铃舌和短册结点；角度单位为度，坐标为高清 SVG 像素。
+
+    paper_offset_x 是反向风的水平偏移，paper_offset_y 是上升气流的上浮偏移。
+    """
     top = QPointF(*LINK_TOP)
     clapper_rad = math.radians(clapper_angle)
     clapper = QPointF(
@@ -233,8 +665,8 @@ def linkage_points(clapper_angle, paper_angle):
     )
     paper_rad = math.radians(paper_angle)
     knot = QPointF(
-        clapper.x() + math.sin(paper_rad) * PAPER_LINE_LENGTH,
-        clapper.y() + math.cos(paper_rad) * PAPER_LINE_LENGTH,
+        clapper.x() + math.sin(paper_rad) * PAPER_LINE_LENGTH + float(paper_offset_x),
+        clapper.y() + math.cos(paper_rad) * PAPER_LINE_LENGTH + float(paper_offset_y),
     )
     return top, clapper, knot
 
@@ -460,9 +892,13 @@ class FenglingBall(QWidget):
         self.angle_bell = 0.0
         self.angle_taz = 0.0
         self.angle_clapper = 0.0
+        self.angle_clapper_spin = 0.0
         self.velocity_bell = 0.0
         self.velocity_taz = 0.0
         self.velocity_clapper = 0.0
+        self.velocity_clapper_spin = 0.0
+        self.angle_paper_spin = 0.0
+        self.velocity_paper_spin = 0.0
         self.hovered = False
         self.hover_wind = 0.0
         self.hover_strength = 1.0
@@ -473,9 +909,11 @@ class FenglingBall(QWidget):
             save_state(self.state)
         self._sound_cooldown = 0.0
         self._delivery_ring_until = 0.0  # 送达响铃窗口截止（monotonic 秒）；期内撞壁允许非悬停发声
+        self._drag_chime_until = 0.0  # 拖动余势响铃窗口截止；期内非悬停撞壁也出声
         self._chime_pool = []
         self._last_chime_idx = -1
         self._sound_voices = []
+        self._sound_voice_paths = []
         self._sound_voice_index = 0
         self._init_chime_pool()
         self._init_sound_voices()
@@ -486,14 +924,21 @@ class FenglingBall(QWidget):
         self._heart_seen_ids = set()
         self.heart_ready.connect(self._apply_heart_poll)
 
+        self._last_ts = time.monotonic()
         self._drag = None
         self._press_global = None
         self._moved = False
+        self._drag_motion_active = False
+        self._drag_sample_x = 0.0
+        self._drag_sample_y = 0.0
+        self._drag_sample_ts = self._last_ts
+        self._drag_velocity_x = 0.0
+        self._drag_velocity_y = 0.0
+        self._drag_motion_last_ts = self._last_ts
         self._drag_menu_was_visible = False
         self._screen_check_elapsed = 0.0
         self._hover_exit_elapsed = 0.0
 
-        self._last_ts = time.monotonic()
         cursor = QCursor.pos()
         self._cursor_sample = (cursor.x(), cursor.y(), self._last_ts)
         timer = QTimer(self)
@@ -509,7 +954,13 @@ class FenglingBall(QWidget):
         self.pix_taz = self._render_svg("fengling-tanzaku.svg", size)
 
     def _draw_linkage(self, painter, clapper_angle, paper_angle):
-        top, clapper, knot = linkage_points(clapper_angle, paper_angle)
+        paper_offset_x = tanzaku_airflow_offset(
+            self._drag_velocity_x, self._drag_velocity_y
+        )
+        paper_offset_y = tanzaku_airflow_lift(self._drag_velocity_y)
+        top, clapper, knot = linkage_points(
+            clapper_angle, paper_angle, paper_offset_x, paper_offset_y
+        )
         rope_bend = (self.velocity_clapper - self.velocity_taz) * 0.42
         upper_control, lower_control = linkage_curve_controls(
             top, clapper, knot, rope_bend
@@ -524,24 +975,31 @@ class FenglingBall(QWidget):
         path.quadTo(lower_control, knot)
         painter.drawPath(path)
 
-        painter.setBrush(QColor("#fff4d4"))
-        painter.drawEllipse(
+        draw_clapper_disc(
+            painter,
             clapper,
-            CLAPPER_RX * RENDER_SCALE,
-            CLAPPER_RY * RENDER_SCALE,
+            self.angle_clapper_spin,
+            RENDER_SCALE,
         )
+        painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(QColor("#fff9ea"))
         painter.drawEllipse(knot, 4.5 * RENDER_SCALE, 4.5 * RENDER_SCALE)
 
     def _draw_paper(self, painter, clapper_angle, paper_angle):
-        _top, _clapper, knot = linkage_points(clapper_angle, paper_angle)
-        px, py = PAPER_PIVOT
+        paper_offset_x = tanzaku_airflow_offset(
+            self._drag_velocity_x, self._drag_velocity_y
+        )
+        paper_offset_y = tanzaku_airflow_lift(self._drag_velocity_y)
+        _top, _clapper, knot = linkage_points(
+            clapper_angle, paper_angle, paper_offset_x, paper_offset_y
+        )
+        wx, roll = paper_twist_projection(self.angle_paper_spin)
         painter.save()
-        painter.translate(knot.x() - px, knot.y() - py)
-        painter.translate(px, py)
+        painter.translate(knot.x(), knot.y())
         painter.rotate(paper_angle)
-        painter.translate(-px, -py)
-        painter.drawPixmap(0, 0, self.pix_taz)
+        painter.scale(wx, 1.0)
+        painter.rotate(roll)
+        draw_tanzaku_paper(painter, self.angle_paper_spin, RENDER_SCALE)
         painter.restore()
 
     def _render_svg(self, name, size):
@@ -586,6 +1044,75 @@ class FenglingBall(QWidget):
         self.state["y"] = pos.y()
         save_state(self.state)
 
+    def _reset_drag_motion(self, now=None):
+        """一次拖动只从当前窗口位置采样，旧拖速不能串进下一次手势。"""
+        now = time.monotonic() if now is None else float(now)
+        pos = self.pos()
+        self._drag_sample_x = float(pos.x())
+        self._drag_sample_y = float(pos.y())
+        self._drag_sample_ts = now
+        self._drag_velocity_x = 0.0
+        self._drag_velocity_y = 0.0
+        self._drag_motion_last_ts = now
+        self._drag_motion_active = False
+
+    def _apply_drag_impulses(self, delta_vx, delta_vy):
+        bell, paper, clapper, spin = wind_chime_drag_impulses(delta_vx, delta_vy)
+        self.velocity_bell += bell
+        self.velocity_taz += paper
+        self.velocity_clapper += clapper
+        self.velocity_clapper_spin += spin
+
+    def _record_drag_motion(self, position=None, now=None):
+        """记录实际窗口位移；联合面板触边限位后速度自然归零。"""
+        now = time.monotonic() if now is None else float(now)
+        position = self.pos() if position is None else position
+        vx, vy, dvx, dvy, _speed = sample_drag_velocity(
+            self._drag_sample_x,
+            self._drag_sample_y,
+            self._drag_sample_ts,
+            self._drag_velocity_x,
+            self._drag_velocity_y,
+            position.x(),
+            position.y(),
+            now,
+        )
+        self._drag_sample_x = float(position.x())
+        self._drag_sample_y = float(position.y())
+        self._drag_sample_ts = now
+        self._drag_velocity_x = vx
+        self._drag_velocity_y = vy
+        self._drag_motion_last_ts = now
+        self._drag_motion_active = True
+        self._apply_drag_impulses(dvx, dvy)
+
+    def _release_drag_motion(self):
+        """鼠标急停等价于锚点速度骤降到零，让悬挂件凭惯性越过重心。"""
+        if self._drag_motion_active:
+            # 急停冲量小于起步冲量：极短 flick 即使没等到下一帧，也会先保留滞后再回弹，不能正负相消成静止。
+            self._apply_drag_impulses(
+                -self._drag_velocity_x * 0.38,
+                -self._drag_velocity_y * 0.38,
+            )
+        self._drag_velocity_x *= 0.25
+        self._drag_velocity_y *= 0.25
+        self._drag_motion_active = False
+        self._drag_motion_last_ts = time.monotonic()
+
+    def _decay_drag_motion(self, now, dt):
+        fresh = (
+            self._drag_motion_active
+            and now - self._drag_motion_last_ts <= DRAG_STALE_AFTER
+        )
+        if fresh:
+            return
+        decay = math.exp(-dt / DRAG_DECAY_TAU)
+        self._drag_velocity_x *= decay
+        self._drag_velocity_y *= decay
+        if math.hypot(self._drag_velocity_x, self._drag_velocity_y) < 0.5:
+            self._drag_velocity_x = 0.0
+            self._drag_velocity_y = 0.0
+
     # ── 动画帧：阻尼摆 + 非等速微风 ──
     def _tick(self):
         now = time.monotonic()
@@ -593,6 +1120,28 @@ class FenglingBall(QWidget):
         dt = min(frame_elapsed, 0.05)
         self._last_ts = now
         self.t += dt
+        self._decay_drag_motion(now, dt)
+        dragging = bool(
+            self._drag_motion_active
+            and now - self._drag_motion_last_ts <= 0.18
+        )
+        drag_speed = math.hypot(self._drag_velocity_x, self._drag_velocity_y)
+        drag_influence = min(1.0, drag_speed / 130.0)
+        (
+            drag_bell_target,
+            drag_taz_target,
+            drag_clapper_target,
+            drag_spin_drive,
+        ) = wind_chime_drag_targets(
+            self._drag_velocity_x,
+            self._drag_velocity_y,
+        )
+        tanzaku_air_influence = tanzaku_airflow_influence(
+            self._drag_velocity_x, self._drag_velocity_y
+        )
+        clapper_air_influence = clapper_airflow_influence(
+            self._drag_velocity_x, self._drag_velocity_y
+        )
 
         # 分辨率、DPI 或远程显示模式变化后，自动把旧坐标拉回当前屏幕。
         self._screen_check_elapsed += dt
@@ -619,7 +1168,7 @@ class FenglingBall(QWidget):
         )
         entry_direction = self.gust_direction
         entry_strength = self.hover_strength
-        if cursor_hovered and not self.hovered:
+        if cursor_hovered and not self.hovered and not dragging:
             previous_x, previous_y, previous_ts = self._cursor_sample
             entry_direction, _speed, entry_strength = calculate_entry_wind(
                 previous_x,
@@ -633,7 +1182,7 @@ class FenglingBall(QWidget):
         self._cursor_sample = (cursor_global.x(), cursor_global.y(), now)
 
         # 悬停时风势迅速升高，移开后缓慢散去，避免生硬切档。
-        target_hover_wind = 1.0 if self.hovered else 0.0
+        target_hover_wind = 0.16 if dragging else 1.0 if self.hovered else 0.0
         wind_tau = 0.16 if self.hovered else 1.45
         wind_blend = 1.0 - math.exp(-dt / wind_tau)
         self.hover_wind += (target_hover_wind - self.hover_wind) * wind_blend
@@ -665,10 +1214,14 @@ class FenglingBall(QWidget):
             (strong_bell_target - self.angle_bell) * 24.0
             - self.velocity_bell * 5.0
         )
+        hover_mix = self.hover_wind * (0.12 if dragging else 1.0)
         acc_bell = (
-            normal_acc_bell * (1.0 - self.hover_wind)
-            + strong_acc_bell * self.hover_wind
+            normal_acc_bell * (1.0 - hover_mix)
+            + strong_acc_bell * hover_mix
         )
+        acc_bell += (
+            drag_bell_target - self.angle_bell
+        ) * 22.0 * drag_influence
         self.velocity_bell += acc_bell * dt
         self.angle_bell += self.velocity_bell * dt
 
@@ -693,17 +1246,24 @@ class FenglingBall(QWidget):
             - acc_bell * 0.8
         )
         acc_taz = (
-            normal_acc_taz * (1.0 - self.hover_wind)
-            + strong_acc_taz * self.hover_wind
+            normal_acc_taz * (1.0 - hover_mix)
+            + strong_acc_taz * hover_mix
         )
+        acc_taz += (
+            drag_taz_target - self.angle_taz
+        ) * 42.0 * tanzaku_air_influence
         self.velocity_taz += acc_taz * dt
         self.angle_taz += self.velocity_taz * dt
 
         self.angle_bell = max(-12.0, min(12.0, self.angle_bell))
-        self.angle_taz = max(-26.0, min(26.0, self.angle_taz))
+        self.angle_taz = max(-60.0, min(60.0, self.angle_taz))
 
         # 铃舌由短册牵引，但有自己的重量和滞后；真正碰壁时反弹并触发一声。
-        clapper_target = self.angle_taz * 1.04 - self.angle_bell * 0.16
+        clapper_target = (
+            self.angle_taz * 1.04
+            - self.angle_bell * 0.16
+            + drag_clapper_target * clapper_air_influence
+        )
         acc_clapper = (
             (clapper_target - self.angle_clapper) * CLAPPER_SPRING
             - self.velocity_clapper * CLAPPER_DAMP
@@ -715,15 +1275,43 @@ class FenglingBall(QWidget):
             self.angle_clapper,
             self.velocity_clapper,
         )
+        if impact > 0.0:
+            side = 1.0 if self.angle_clapper >= 0.0 else -1.0
+            self.velocity_clapper_spin += side * min(impact * 0.62, 34.0)
+        wind_twist = wind * 1.4 * (0.6 + 0.4 * math.sin(self.t * 3.3))
+        spin_drive = (
+            (self.velocity_taz - self.velocity_clapper) * 1.15
+            + wind_twist
+            + drag_spin_drive * max(drag_influence, 0.18 if dragging else 0.0)
+        )
+        self.angle_clapper_spin, self.velocity_clapper_spin = advance_clapper_spin(
+            self.angle_clapper_spin,
+            self.velocity_clapper_spin,
+            spin_drive,
+            dt,
+        )
+        # 纸片绕悬线飘转：纸轻，风一吹就绕绳打转，不跟铃舌硬绑，这是"纸片自身扭动"的来源。
+        paper_spin_drive = max(-110.0, min(
+            wind * 100.0
+            + (self.velocity_taz - self.velocity_clapper) * 0.5
+            + drag_spin_drive * drag_influence * 1.0,
+            110.0,
+        ))
+        self.angle_paper_spin, self.velocity_paper_spin = advance_paper_spin(
+            self.angle_paper_spin,
+            self.velocity_paper_spin,
+            paper_spin_drive,
+            dt,
+        )
         self._sound_cooldown = max(0.0, self._sound_cooldown - dt)
-        # 送达响铃窗口内允许非悬停撞壁发声（铃舌由真实冲量驱动，因动而声）；
-        # 窗口外维持原规则：悬停气流才响。
-        chime_hovered = self.hovered
+        # 响铃资格：悬停气流、送达窗口、拖动中或刚松手的余势摆动，任一即可；
+        # 拖动轨迹以外的非悬停普通摆动维持原规则：悬停气流才响。
         in_delivery_window = time.monotonic() < self._delivery_ring_until
-        if in_delivery_window:
-            chime_hovered = True
-        if should_attempt_chime(impact, chime_hovered, self._sound_cooldown):
-            self._play_chime(impact)
+        chime_allowed, volume_scale = resolve_chime_eligibility(
+            self.hovered, in_delivery_window, self._drag is not None, self._drag_chime_until
+        )
+        if should_attempt_chime(impact, chime_allowed, self._sound_cooldown):
+            self._play_chime(impact, volume_scale=volume_scale)
         self.update()
 
     def _poll_hearts_async(self):
@@ -850,6 +1438,7 @@ class FenglingBall(QWidget):
         # 清冷却保证本次撞击一定发声；冲量直接作用在铃舌速度上，由物理撞壁触发声音。
         self._sound_cooldown = 0.0
         self.velocity_clapper += strength
+        self.velocity_clapper_spin += strength * 0.22
     # ── 绘制（去圆底，仅铃 + 纸条；纸条画在铃身变换内，跟随铃口） ──
     def paintEvent(self, _e):
         p = QPainter(self)
@@ -884,10 +1473,14 @@ class FenglingBall(QWidget):
             self._drag = self._press_global - self.pos()
             self._moved = False
             self._prepare_menu_drag()
+            self._reset_drag_motion()
             # 触碰像给悬绳一个很轻的拨动，随后完全由阻尼自然回摆。
             direction = 1.0 if self.angle_bell <= 0 else -1.0
             self.velocity_bell += 5.5 * direction
             self.velocity_taz -= 11.0 * direction
+            clapper_direction = 1.0 if self.angle_clapper <= 0 else -1.0
+            self.velocity_clapper += CLICK_CLAPPER_KICK * clapper_direction
+            self.velocity_clapper_spin += CLICK_CLAPPER_KICK * 0.22 * clapper_direction
         e.accept()
 
     def mouseMoveEvent(self, e):
@@ -900,12 +1493,15 @@ class FenglingBall(QWidget):
                     return
                 self._moved = True
             self.move(current - self._drag)
+            self._ensure_visible()
             self._sync_dragged_menu()
+            self._record_drag_motion()
         e.accept()
 
     def mouseReleaseEvent(self, e):
         if e.button() == Qt.MouseButton.LeftButton:
             if self._moved:
+                self._release_drag_motion()
                 self._snap()
                 self._save_pos()
                 self._sync_dragged_menu()
@@ -913,7 +1509,10 @@ class FenglingBall(QWidget):
                 self.menu.close_menu()
             else:
                 self._toggle_menu()
+            if not self._moved:
+                self._drag_motion_active = False
             self._drag = None
+            self._drag_chime_until = time.monotonic() + DRAG_CHIME_WINDOW_S  # 松开后余势摆动仍可响
             self._press_global = None
             self._drag_menu_was_visible = False
         elif e.button() == Qt.MouseButton.RightButton:
@@ -945,24 +1544,32 @@ class FenglingBall(QWidget):
             print(f"[风铃] 生成碰撞音色失败: {error}", file=sys.stderr)
 
     def _init_sound_voices(self):
-        """准备三个独立播放位置，让新铃声不截断仍在消散的旧尾音。"""
-        if QSoundEffect is None:
+        """预加载多个独立播放位置，避免碰撞时才换音频源导致仍在 Loading。"""
+        self._sound_voice_paths = []
+        if QSoundEffect is None or not self._chime_pool:
             return
         try:
-            for _ in range(CHIME_VOICE_COUNT):
+            for index in range(CHIME_VOICE_COUNT):
                 voice = QSoundEffect(self)
+                source_path = prepare_sound_file(
+                    self._chime_pool[index % len(self._chime_pool)], 1.0
+                )
+                voice.setSource(QUrl.fromLocalFile(source_path))
+                voice.setVolume(1.0)
                 self._sound_voices.append(voice)
+                self._sound_voice_paths.append(source_path)
         except Exception as error:
             self._sound_voices = []
+            self._sound_voice_paths = []
             print(f"[风铃] 初始化重叠播放失败，改用系统播放: {error}", file=sys.stderr)
 
-    def _play_chime(self, impact):
-        """碰撞触发：从切片池挑一个不重复的变体，音量随撞击力度走。"""
+    def _play_chime(self, impact, volume_scale=1.0):
+        """碰撞触发：优先播放已预加载变体，音量随撞击力度走；非悬停余势可整体压低。"""
         if self.sound_volume <= 0 or self._sound_cooldown > 0:
             return
         if not self._chime_pool:
             return
-        volume = chime_volume_from_impact(impact, self.sound_volume)
+        volume = chime_volume_from_impact(impact, self.sound_volume) * volume_scale
         idx = random.randint(0, len(self._chime_pool) - 1)
         if len(self._chime_pool) > 1:
             while idx == self._last_chime_idx:
@@ -971,18 +1578,23 @@ class FenglingBall(QWidget):
         data = self._chime_pool[idx]
         self._sound_cooldown = CHIME_COOLDOWN
         try:
-            sound_path = prepare_sound_file(data, volume)
             if self._sound_voices:
                 idle = next((voice for voice in self._sound_voices if not voice.isPlaying()), None)
                 if idle is None:
                     idle = self._sound_voices[self._sound_voice_index % len(self._sound_voices)]
                 self._sound_voice_index = (self._sound_voices.index(idle) + 1) % len(self._sound_voices)
-                idle.setSource(QUrl.fromLocalFile(sound_path))
-                idle.setVolume(1.0)  # 音量已按撞击力度与主音量缩放进文件
-                idle.play()
-                return
+                if (
+                    QSoundEffect is None
+                    or not isinstance(idle, QSoundEffect)
+                    or idle.status() == QSoundEffect.Status.Ready
+                ):
+                    idle.setVolume(volume)
+                    idle.play()
+                    return
+                # QSoundEffect 仍在 Loading/Error 时不能静默吞掉这一下，落到 winsound 文件播放。
             if winsound is None:
                 return
+            sound_path = prepare_sound_file(data, volume)
             winsound.PlaySound(
                 sound_path,
                 winsound.SND_FILENAME | winsound.SND_ASYNC | winsound.SND_NODEFAULT,
@@ -1395,6 +2007,7 @@ class TargetMenu(QFrame):
         self.view_mode = "auto"
         self.ball.target_mode = "auto"
         self.ball.pinned_target = None
+        self.panel._pinned_expires_in_ms = 0
         self.panel._sync_target_state()
         self.panel._flash("已改为自动判断活跃窗口 ✓")
         self.panel._set_target_selector_visible(False)
@@ -1429,6 +2042,7 @@ class TargetMenu(QFrame):
             "title": session.get("title") or "",
             "sessionPath": session.get("sessionPath") or "",
         }
+        self.panel._pinned_expires_in_ms = int(result.get("pinnedExpiresInMs") or 0)
         self.panel._update_target_label()
         self.panel._flash("已固定这段对话 ✓")
         self.panel._set_target_selector_visible(False)
@@ -1501,6 +2115,7 @@ class FenglingMenu(FadeOnLeaveMixin, QFrame):
         self._actions_signature = None
         self._refreshing = False
         self._target_seq = 0
+        self._pinned_expires_in_ms = 0  # 固定目标的剩余寿命（来自 /target / /pin）
         self._needs_reanchor = False  # 本次打开后内容尚未以完整高度锚定过
         self._user_dragged = False    # 本次打开后用户是否手动拖过面板（拖过则尊重手动位置）
         self.refresh_ready.connect(self._apply_async_refresh)
@@ -1838,6 +2453,7 @@ class FenglingMenu(FadeOnLeaveMixin, QFrame):
         self.ball.target = data.get("target")
         self.ball.target_mode = "pinned" if data.get("mode") == "pinned" else "auto"
         self.ball.pinned_target = data.get("pinned")
+        self._pinned_expires_in_ms = int(data.get("pinnedExpiresInMs") or 0)
         self._update_target_label()
 
     def _update_heart_card(self):
@@ -1896,9 +2512,11 @@ class FenglingMenu(FadeOnLeaveMixin, QFrame):
             if not target:
                 self.lbl_target.setText("固定对话 · 暂未找到")
                 return
-            self.lbl_target.setText(
-                f"固定对话 · {target.get('name', target.get('id', '?'))}"
-            )
+            remain = self._pinned_expires_in_ms
+            base = f"固定对话 · {target.get('name', target.get('id', '?'))}"
+            if remain and remain > 0:
+                base = f"已固定 · {target.get('name', target.get('id', '?'))}（剩{remain / 3600000.0:.1f}小时）"
+            self.lbl_target.setText(base)
             return
         self.btn_target.setText("自动选择 ▴" if self.target_menu.isVisible() else "自动选择 ▾")
         if not target:

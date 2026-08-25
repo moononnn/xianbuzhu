@@ -1,10 +1,12 @@
 # -*- coding: utf-8 -*-
 import os
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+os.environ["HANA_HOME"] = tempfile.mkdtemp(prefix="wv-fengling-hearts-")
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "python"))
 

@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+import math
 import os
 import sys
 import time
@@ -81,6 +82,45 @@ class FenglingInteractionTests(unittest.TestCase):
         self.ball._set_hovered(False)
         self.ball._set_hovered(True, direction=1.0, strength=9.0)
         self.assertEqual(self.ball.hover_strength, fengling_app.MAX_WIND_STRENGTH)
+
+    def test_real_window_drag_feeds_bell_clapper_and_spin_motion(self):
+        self.ball.move(100, 100)
+        self.ball._reset_drag_motion(now=1.0)
+        self.ball.move(160, 125)
+        self.ball._record_drag_motion(now=1.05)
+        self.assertTrue(self.ball._drag_motion_active)
+        self.assertGreater(self.ball._drag_velocity_x, 0.0)
+        self.assertGreater(self.ball._drag_velocity_y, 0.0)
+        self.assertLess(self.ball.velocity_bell, 0.0)
+        self.assertLess(self.ball.velocity_taz, self.ball.velocity_bell)
+        self.assertNotEqual(self.ball.velocity_clapper_spin, 0.0)
+        before_release = self.ball.velocity_bell
+        self.ball._release_drag_motion()
+        self.assertFalse(self.ball._drag_motion_active)
+        self.assertLess(self.ball.velocity_bell, 0.0)
+        self.assertLess(abs(self.ball.velocity_bell), abs(before_release))
+        self.assertLess(
+            math.hypot(self.ball._drag_velocity_x, self.ball._drag_velocity_y),
+            fengling_app.DRAG_MAX_SPEED * 0.3,
+        )
+
+    def test_drag_speed_uses_clamped_edge_position_and_reverses_cleanly(self):
+        screen = self.ball.screen() or QApplication.primaryScreen()
+        geo = screen.availableGeometry()
+        max_x = geo.right() - self.ball.width() - fengling_app.EDGE_INSET + 1
+        y = max(geo.top() + fengling_app.EDGE_INSET, 120)
+        self.ball.move(max_x, y)
+        self.ball._reset_drag_motion(now=1.0)
+
+        self.ball.move(max_x + 120, y)
+        self.ball._ensure_visible()
+        self.ball._record_drag_motion(now=1.05)
+        self.assertEqual(self.ball.x(), max_x)
+        self.assertAlmostEqual(self.ball._drag_velocity_x, 0.0)
+
+        self.ball.move(max_x - 42, y)
+        self.ball._record_drag_motion(now=1.10)
+        self.assertLess(self.ball._drag_velocity_x, 0.0)
 
     def test_tool_panel_hides_on_focus_loss_but_not_while_dragging_ball(self):
         menu = fengling_app.FenglingMenu(self.ball)
@@ -241,6 +281,25 @@ class FenglingInteractionTests(unittest.TestCase):
         self.assertEqual(self.ball.target_mode, "pinned")
         self.assertEqual(self.ball.pinned_target["sessionPath"], "C:/sessions/fixed.jsonl")
         self.assertIn("固定对话", menu.lbl_target.text())
+        menu.close()
+
+    def test_fixed_target_label_shows_remaining_hours(self):
+        menu = fengling_app.FenglingMenu(self.ball)
+        target_menu = menu.target_menu
+        target_menu.view_mode = "manual"
+        with patch.object(
+            fengling_app,
+            "api_post",
+            return_value={"ok": True, "pinnedExpiresInMs": 3600000},
+        ), patch.object(menu, "_sync_target_state"):
+            target_menu._pick({
+                "agentId": "helperB",
+                "agentName": "伙伴A",
+                "sessionPath": "C:/sessions/fixed.jsonl",
+                "title": "伙伴A的对话",
+            })
+        self.assertEqual(self.ball.target_mode, "pinned")
+        self.assertIn("剩1.0小时", menu.lbl_target.text())
         menu.close()
 
     def test_new_heart_only_plays_sound_until_user_opens_panel(self):
@@ -676,6 +735,39 @@ class FenglingInteractionTests(unittest.TestCase):
         self.assertTrue(flags & fengling_app.winsound.SND_FILENAME)
         self.assertTrue(flags & fengling_app.winsound.SND_ASYNC)
         self.assertFalse(flags & fengling_app.winsound.SND_MEMORY)
+
+    @unittest.skipIf(sys.platform != "win32", "winsound 回退仅 Windows 平台")
+    def test_qsound_loading_falls_back_instead_of_silently_dropping_chime(self):
+        class FakeVoice:
+            class Status:
+                Ready = object()
+
+            def __init__(self):
+                self.played = False
+
+            def isPlaying(self):
+                return False
+
+            def status(self):
+                return "loading"
+
+            def setVolume(self, _volume):
+                return None
+
+            def play(self):
+                self.played = True
+
+        voice = FakeVoice()
+        self.ball.sound_volume = 1.0
+        self.ball._sound_voices = [voice]
+        self.ball._sound_cooldown = 0.0
+        with (
+            patch.object(fengling_app, "QSoundEffect", FakeVoice),
+            patch.object(fengling_app.winsound, "PlaySound") as play,
+        ):
+            self.ball._play_chime(24.0)
+        play.assert_called_once()
+        self.assertFalse(voice.played)
 
     def test_real_async_refresh_delivers_catalog_and_target(self):
         menu = fengling_app.FenglingMenu(self.ball)
