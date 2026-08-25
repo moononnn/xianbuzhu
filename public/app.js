@@ -1342,11 +1342,21 @@
         var gift = heart.gift || {};
         var heartEventLabel = heart.eventType === 'scene' ? '悄悄替你留下一点动静' : '悄悄放到你这里';
         html += '<article class="heart-item">';
-        html += '<div class="heart-item-head"><span class="heart-item-from">' + escapeHtml(partnerName) + '</span>' + (heart.responded ? '<span class="heart-responded-badge">已回礼</span>' : '') + '<span class="heart-item-time">' + timeAgo(heart.createdAt) + '</span></div>';
+        html += '<div class="heart-item-head"><span class="heart-item-from">' + escapeHtml(partnerName) + '</span><span class="heart-item-time">' + timeAgo(heart.createdAt) + '</span></div>';
         html += '<div class="heart-gift"><span class="heart-gift-icon">' + escapeHtml(gift.icon || '🎁') + '</span><span><b>' + escapeHtml(gift.name || '一份小礼物') + '</b><small>' + heartEventLabel + '</small></span></div>';
         html += '<div class="heart-message">' + escapeHtml(heart.message || '') + '</div>';
         if (heart.responded) {
-          html += '<div class="heart-continue-hint">你已经回应过这份心意。</div>';
+          var response = heart.response || null;
+          if (response && response.itemName) {
+            var responsePrefix = response.type === 'prank'
+              ? '后来你也回敬了一个小恶作剧：'
+              : response.type === 'interact'
+                ? '后来你也顺手留了一点回应：'
+                : '后来你也顺手留了一份：';
+            html += '<div class="heart-continue-hint heart-response-trace">' + responsePrefix + escapeHtml((response.icon || '') + response.itemName) + '。</div>';
+          } else {
+            html += '<div class="heart-continue-hint heart-response-trace">后来你也回应过这份心意。</div>';
+          }
         } else {
           html += '<div class="heart-continue-hint">如果你也想回应' + escapeHtml(partnerName) + '，可以继续互动或送一份心意。 <button class="heart-continue-link" onclick="window._tbContinueFromHeart(\'' + partnerId + '\')">去互动</button></div>';
         }

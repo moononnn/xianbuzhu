@@ -180,3 +180,42 @@ test("会话目录不存在 / 为空返回空字符串", async () => {
   fs.mkdirSync(sessionsDir, { recursive: true });
   assert.equal(mod.findLatestSessionPath("hanako"), "");
 });
+
+test("跳过闲不住自推送的送达文本：被推送过的窗口不凭它抢成最新活跃", async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "wv-sess-"));
+  const sessionsDir = path.join(home, "agents", "hanako", "sessions");
+  fs.mkdirSync(sessionsDir, { recursive: true });
+
+  // A：被闲不住推送过（送达文本顶着 user 身份 + 助手回复），但用户之后没再亲手打字
+  const aPath = path.join(sessionsDir, "A.jsonl");
+  fs.writeFileSync(
+    aPath,
+    [
+      sessionLine("user", "2026-08-07T11:00:00.000Z", "昨晚聊的事"),
+      sessionLine(
+        "user",
+        "2026-08-07T13:00:00.000Z",
+        "📬 收到来自朋友的一份回礼：🎵轻轻哼着歌～ 这是对你之前留下的「给窗台的茉莉浇水」的回应。",
+      ),
+      sessionLine("assistant", "2026-08-07T13:01:00.000Z"),
+    ].join("\n") + "\n",
+    "utf-8",
+  );
+  fs.utimesSync(aPath, 1_783_506_060, 1_783_506_060); // mtime 最新（有回复）
+
+  // B：用户真的在 12:00 打过字（晚于 A 的真实最后打字 11:00，早于 A 的推送 13:00）
+  const bPath = path.join(sessionsDir, "B.jsonl");
+  fs.writeFileSync(
+    bPath,
+    [sessionLine("user", "2026-08-07T12:00:00.000Z", "现在正在聊的窗口")].join("\n") + "\n",
+    "utf-8",
+  );
+  fs.utimesSync(bPath, 1_783_461_600, 1_783_461_600); // mtime 更旧
+
+  const mod = await freshDataModule(home);
+  const picked = mod.findLatestSessionPath("hanako");
+  assert.ok(
+    picked.endsWith("B.jsonl"),
+    "自推送的送达文本不应顶掉真实活跃窗口，应选 B，实际 " + picked,
+  );
+});

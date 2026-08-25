@@ -474,6 +474,44 @@ test("publicHeart: 只暴露展示所需字段，不再带回复或回礼入口"
   assert.doesNotMatch(leaked.message, /think|内部草稿/i);
 });
 
+test("getHeartSummary: 已回应心意保留到过期，并回显对应的回礼痕迹", () => {
+  const heart = makeHeart({
+    id: "heart-returned",
+    createdAt: "2026-08-18T03:00:00.000Z",
+    expiresAt: "2026-08-21T03:00:00.000Z",
+    status: "read",
+    respondedAt: "2026-08-18T05:00:00.000Z",
+    responseVisitId: "visit-return",
+  });
+  const data = makeData(heart);
+  data.pendingVisits = [{
+    id: "visit-return",
+    isReturn: true,
+    type: "gift",
+    itemId: "cookies",
+    itemName: "手作曲奇",
+    icon: "🧁",
+    createdAt: "2026-08-18T05:00:00.000Z",
+    returnOfHeartId: "heart-returned",
+  }];
+
+  const summary = getHeartSummary(data, Date.parse("2026-08-18T06:00:00.000Z"));
+  assert.equal(summary.hearts.length, 1);
+  assert.equal(summary.hearts[0].responded, true);
+  assert.deepEqual(summary.hearts[0].response, {
+    type: "gift",
+    itemId: "cookies",
+    itemName: "手作曲奇",
+    icon: "🧁",
+    createdAt: "2026-08-18T05:00:00.000Z",
+  });
+  assert.equal(data.heartInbox.length, 1, "回礼不会从信箱删除");
+
+  const expired = getHeartSummary(data, Date.parse("2026-08-21T03:00:00.000Z"));
+  assert.equal(expired.hearts.length, 0, "只在原本的自然过期时间消失");
+  assert.equal(data.heartInbox[0].status, "expired");
+});
+
 test("ensureHeartState: 旧回礼状态回到普通可见状态并清掉旧设置", () => {
   const data = {
     heartSettings: { frequency: "low", returnGiftEnabled: true },

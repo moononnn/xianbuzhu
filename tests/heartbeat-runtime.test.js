@@ -92,7 +92,8 @@ test("runHeartbeatTick: 未配置模型时不落固定模板心意", async () =>
 
 test("runHeartbeatTick: 暂态模型故障保留原计划并安排退避重试", async () => {
   const date = todayStr();
-  const now = Date.now();
+  // 固定在白天：三轮 1/3/10 分钟退避不能因为测试恰好跨进静默时段而变成 missed。
+  const now = new Date(`${date}T12:00:00+08:00`).getTime();
   const entry = {
     id: `heart-plan-${date}-transient`,
     partnerId: "hanako",

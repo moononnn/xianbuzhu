@@ -2512,17 +2512,6 @@ button:disabled,
   font-family: var(--font-display);
   font-size: 16px;
 }
-.heart-responded-badge {
-  margin-left: 2px;
-  padding: 1px 9px;
-  border-radius: 999px;
-  background: var(--mint-faint);
-  color: var(--mint-deep);
-  border: 1px solid color-mix(in srgb, var(--mint-deep) 32%, transparent);
-  font-size: 11px;
-  font-weight: 600;
-  line-height: 1.7;
-}
 .heart-item-time { margin-left: auto; color: var(--muted); font-size: 11px; }
 .heart-gift {
   display: flex;
@@ -2565,6 +2554,7 @@ button:disabled,
   font-size: 12px;
   line-height: 1.6;
 }
+.heart-response-trace { color: var(--mint-deep); }
 .heart-continue-link {
   padding: 0;
   border: 0;

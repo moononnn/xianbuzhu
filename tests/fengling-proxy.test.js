@@ -91,7 +91,12 @@ test("风铃代理由服务端锁定点击瞬间的最活跃会话", async () =>
 test("风铃固定目标会话后，动作会把指定 sessionPath 传到业务层", async () => {
   const fixedPath = writeSession("helperB", "2026-08-09T04:00:00.000Z", "fixed.jsonl");
   writeData({
-    pinnedTarget: { agentId: "helperB", sessionPath: fixedPath, title: "伙伴A的对话" },
+    pinnedTarget: {
+      agentId: "helperB",
+      sessionPath: fixedPath,
+      title: "伙伴A的对话",
+      pinnedAt: Date.now() - 60 * 60 * 1000, // 1 小时前固定，仍在 24h 寿命内
+    },
   });
   writeSession("hanako", "2026-08-09T05:00:00.000Z");
   const captured = {};
@@ -108,4 +113,50 @@ test("风铃固定目标会话后，动作会把指定 sessionPath 传到业务�
   assert.equal(result.body.target.mode, "pinned");
   assert.equal(captured.input.to, "helperB");
   assert.equal(captured.input.sessionPath, fixedPath);
+});
+
+test("无 pinnedAt 的历史遗留固定目标视为失效，回落到最近活跃对话", async () => {
+  const fixedPath = writeSession("helperB", "2026-08-09T04:00:00.000Z", "fixed.jsonl");
+  writeData({
+    pinnedTarget: { agentId: "helperB", sessionPath: fixedPath, title: "昨晚的旧窗口" },
+  });
+  writeSession("hanako", "2026-08-09T05:00:00.000Z", "hanako.jsonl");
+  const captured = {};
+  const result = await performFenglingVisit(
+    { type: "interact", itemId: "quiet", to: "hanako" },
+    { request: async () => true },
+    async (input) => {
+      captured.input = input;
+      return { status: 200, body: { success: true } };
+    },
+  );
+  assert.equal(result.body.target.id, "hanako", "历史遗留固定应失效并回自动判断");
+  assert.equal(result.body.target.mode, "auto");
+  assert.equal(captured.input.to, "hanako");
+  assert.equal(captured.input.sessionPath, path.join(home, "agents", "hanako", "sessions", "hanako.jsonl"));
+});
+
+test("超过 24 小时寿命的固定目标自动失效，回落到最近活跃对话", async () => {
+  const fixedPath = writeSession("helperB", "2026-08-09T04:00:00.000Z", "fixed.jsonl");
+  writeData({
+    pinnedTarget: {
+      agentId: "helperB",
+      sessionPath: fixedPath,
+      title: "过期固定",
+      pinnedAt: Date.now() - 25 * 60 * 60 * 1000, // 25 小时前，已超 24h
+    },
+  });
+  writeSession("hanako", "2026-08-09T05:00:00.000Z", "hanako.jsonl");
+  const captured = {};
+  const result = await performFenglingVisit(
+    { type: "interact", itemId: "quiet", to: "hanako" },
+    { request: async () => true },
+    async (input) => {
+      captured.input = input;
+      return { status: 200, body: { success: true } };
+    },
+  );
+  assert.equal(result.body.target.id, "hanako");
+  assert.equal(result.body.target.mode, "auto");
+  assert.equal(captured.input.to, "hanako");
 });
