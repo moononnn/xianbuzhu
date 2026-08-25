@@ -103,9 +103,9 @@ class FenglingFusionSoundTests(unittest.TestCase):
 
     def test_fusion_drag_has_a_backward_compatible_flower_physics_fallback(self):
         with (
-            patch.object(fusion_ball._ORIGINAL_ZHUJIAN, "flower_drag_targets", None),
-            patch.object(fusion_ball._ORIGINAL_ZHUJIAN, "flower_drag_impulses", None),
-            patch.object(fusion_ball._ORIGINAL_ZHUJIAN, "advance_motion_spring", None),
+            patch.object(fusion_ball._ORIGINAL_ZHUJIAN, "flower_drag_targets", None, create=True),
+            patch.object(fusion_ball._ORIGINAL_ZHUJIAN, "flower_drag_impulses", None, create=True),
+            patch.object(fusion_ball._ORIGINAL_ZHUJIAN, "advance_motion_spring", None, create=True),
         ):
             targets = fusion_ball.shared_flower_drag_targets(1000.0, 600.0)
             impulses = fusion_ball.shared_flower_drag_impulses(800.0, 400.0)

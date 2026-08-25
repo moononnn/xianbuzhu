@@ -2507,7 +2507,11 @@ class FusionZhujianMenu(OriginalZhujianMenu):
 
 
 class FusionReadPanel(FadeMixin, OriginalReadPanel):
-    """正式朗读面板 + 原版同款离开淡出 + 融合态左侧锚点。"""
+    """正式朗读面板 + 原版同款离开淡出 + 融合态左侧锚点。
+
+    拖动联动自己接管（不依赖解语花主分支是否已带联动），
+    拖面板时主球同步移动并喂给两边物理；兼容解语花新旧版本。
+    """
 
     def __init__(self, ball):
         super().__init__(ball)
@@ -2519,6 +2523,45 @@ class FusionReadPanel(FadeMixin, OriginalReadPanel):
 
     def move_to_ball(self):
         _move_fusion_panel_left(self)
+
+    # ── 拖动联动：面板与主球保持相对距离一起移动，并喂给双方物理 ──
+    def mousePressEvent(self, e):
+        if e.button() == Qt.MouseButton.LeftButton:
+            self._drag_press = e.globalPosition().toPoint()
+            self._drag_panel_start = self.pos()
+            self._drag_ball_start = self.ball.pos()
+            self._drag_moved = False
+            self.ball._reset_drag_motion()
+        super().mousePressEvent(e)
+
+    def mouseMoveEvent(self, e):
+        if self._drag_press is not None and (e.buttons() & Qt.MouseButton.LeftButton):
+            cur = e.globalPosition().toPoint()
+            delta = cur - self._drag_press
+            if not self._drag_moved:
+                if delta.manhattanLength() < QApplication.startDragDistance():
+                    return
+                self._drag_moved = True
+            screen = self.screen() or QApplication.primaryScreen()
+            geo = screen.availableGeometry()
+            dx, dy = _ORIGINAL_ZHUJIAN.clamp_pair_drag(
+                delta.x(), delta.y(),
+                (self._drag_panel_start.x(), self._drag_panel_start.y(), self.width(), self.height()),
+                (self._drag_ball_start.x(), self._drag_ball_start.y(), self.ball.width(), self.ball.height()),
+                (geo.left(), geo.top(), geo.right() + 1, geo.bottom() + 1),
+            )
+            self.move(self._drag_panel_start + QPoint(dx, dy))
+            self.ball.move(self._drag_ball_start + QPoint(dx, dy))
+            self.ball._record_drag_motion()
+            return  # 已自己接管拖动，不再走原版（新旧解语花行为一致）
+        super().mouseMoveEvent(e)
+
+    def mouseReleaseEvent(self, e):
+        if e.button() == Qt.MouseButton.LeftButton:
+            if self._drag_moved:
+                self.ball._release_drag_motion()
+            return
+        super().mouseReleaseEvent(e)
 
 
 # ─────────────────────────────────────────────────────────────
