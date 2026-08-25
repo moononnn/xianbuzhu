@@ -29,9 +29,16 @@ jobs:
           export HANA_PLUGINS_DIR="$HOME/.hanako/plugins"
           xvfb-run -a python3 -m unittest discover -s tests -p "test_fengling_*.py"
       - name: 命名红线检查
+        env:
+          REDLINE_NAMES: ${{ secrets.REDLINE_NAMES }}
         run: |
-          if git grep -n -I -E "玥儿|绯月|雪奈|悠米|柚月|星眠" -- . ':(exclude).github/workflows/ci.yml'; then
-            echo "::error::外传内容命名红线命中（玥儿/绯月/雪奈/悠米/柚月/星眠），请清理后重新提交"
+          if [ -z "$REDLINE_NAMES" ]; then
+            echo "::error::未配置 REDLINE_NAMES 机密（仓库 Settings → Secrets and variables → Actions），请先添加禁用词名单，再重新运行本检查"
+            echo "名单格式：名字1|名字2|..."
+            exit 1
+          fi
+          if git grep -n -I -E "$REDLINE_NAMES" -- .; then
+            echo "::error::外传内容命名红线命中，请清理后重新提交"
             exit 1
           fi
           echo "命名红线检查通过 ✓"
