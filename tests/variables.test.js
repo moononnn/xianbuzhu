@@ -260,6 +260,21 @@ test("hasAiFlavor: 命中 AI 八股词返回 true", () => {
   assert.equal(hasAiFlavor(""), false);
 });
 
+test("hasAiFlavor: 拒收霸总命令甩话与表演性冷漠", () => {
+  // 命令甩话：把事丢给对方、让对方看着办
+  assert.equal(hasAiFlavor("花插窗边了，你看着办"), true);
+  assert.equal(hasAiFlavor("茶放桌上了，随你便"), true);
+  assert.equal(hasAiFlavor("东西搁这儿了，自己搞定"), true);
+  assert.equal(hasAiFlavor("你爱怎样怎样"), true);
+  // 表演性冷漠：懒得 + 具体动作
+  assert.equal(hasAiFlavor("我懒得调，你回来看不顺眼再自己摆"), true);
+  assert.equal(hasAiFlavor("我不屑解释"), true);
+  // 正常的、有人味的句子不该被误杀
+  assert.equal(hasAiFlavor("花插窗边那个瓶子了，回头看不顺眼再弄正"), false);
+  assert.equal(hasAiFlavor("茶我泡好了，在桌上，趁热"), false);
+  assert.equal(hasAiFlavor("你忙你的，我自己待会儿"), false);
+});
+
 test("parseReview: 解析审核员 JSON 回复，无法解析时保守不通过", () => {
   assert.deepEqual(parseReview('{"pass":true}'), { pass: true, reasons: [], suggestion: "" });
   const rejected = parseReview('{"pass":false,"reasons":["感谢体","太煽情"],"suggestion":"用大白话重写"}');

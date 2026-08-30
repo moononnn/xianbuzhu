@@ -160,7 +160,7 @@ test("runHeartbeatTick: 暂态模型故障保留原计划并安排退避重试",
   assert.equal(readData().heartInbox.length, 0);
 });
 
-test("runHeartbeatTick: 重试到点仍受在线门槛约束，不补发", async () => {
+test("runHeartbeatTick: 离线时心意先生成暂存（不吞），等闸放行再投递", async () => {
   const date = todayStr();
   const now = Date.now();
   const entry = {
@@ -195,9 +195,12 @@ test("runHeartbeatTick: 重试到点仍受在线门槛约束，不补发", async
   });
 
   const saved = readData();
-  assert.equal(saved.heartPlan.entries[0].status, "missed");
+  // 离线不再吞：即使闸不过也会进入生成尝试（presence 被读取判断），
+  // 模型未配置时按生成失败处理；配置了模型则心意会暂存等闸放行
+  assert.equal(saved.heartPlan.entries[0].status, "failed");
+  assert.equal(saved.heartPlan.entries[0].failureKind, "model_not_configured");
   assert.equal(presenceCalled, true);
-  assert.equal(saved.heartInbox.length, 0);
+  assert.equal(saved.heartInbox.length, 0); // 未配置模型时不落模板心意
 });
 
 test("runHeartbeatTick: 卡住的生成状态也进入退避重试", async () => {

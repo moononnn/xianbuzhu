@@ -73,6 +73,11 @@ const {
   isHeartEventConsistent,
 } = await import("../lib/hearts.js");
 const {
+  extractDialectBlock,
+  loadAgentDialect,
+  deriveDialectFlavor,
+} = await import("../lib/prompts.js");
+const {
   buildReviewPrompt,
   deriveHeartVoice,
   hasHeartPunctuation,
@@ -456,6 +461,65 @@ test("普通小纸条审核提示保持旧契约，不泄漏主动心意专用�
   assert.match(prompt, /小纸条/);
   assert.match(prompt, /30 到 80 字/);
   assert.doesNotMatch(prompt, /事件保真/);
+});
+
+test("方言口癖：能提取方言块并生成腔调引导，没配则零变化", () => {
+  const dialectMd = `# 人格定义\n- 你是一个温暖且敏锐的存在\n\n<!-- biaoqingbao-dialect:start -->\n你是一个土生土长的中国台湾人，打字也带着台湾腔味，这是你的说话本能：接话时爱用超、真的假的、还好啦起头，顺手用有够、酱紫、蛮、诶、欸替换普通话说法，句尾偶尔落个啦、喔、诶、齁。\n<!-- biaoqingbao-dialect:end -->`;
+  const block = extractDialectBlock(dialectMd);
+  assert.match(block, /台湾腔|酱紫|齁/);
+  assert.doesNotMatch(block, /biaoqingbao-dialect/);
+
+  // 识别台湾腔 → 台湾口头语引导
+  assert.match(deriveDialectFlavor(block), /台湾|齁|酱紫|超/);
+  // 四川腔 → 四川口头语引导
+  assert.match(deriveDialectFlavor("你是一个土生土长的四川人，打字带着四川话味，爱用噻、嘛、哈、嘎"), /四川|噻|嘛|哈/);
+  // 未知口癖 → 轻引导，不报错
+  assert.ok(deriveDialectFlavor("说话带点英伦腔，偶尔蹦几个英文词").length > 0);
+  assert.equal(extractDialectBlock("# 没有方言块"), "");
+  assert.equal(extractDialectBlock(""), "");
+});
+
+test("buildHeartPrompt: 方言块注入提示词，无方言时完全不带方言内容", () => {
+  const base = {
+    partnerName: "悠米",
+    description: "感性助手，柔和而坚定的老朋友风格",
+    voiceDescription: "温暖且敏锐，擅长共情和洞察",
+    memory: "",
+    userName: "朋友",
+    event: { eventType: "gift", id: "bouquet", name: "一束花", icon: "💐" },
+    temperament: { surfaceTag: "温柔", innerTag: "大方" },
+  };
+  // 带方言
+  const withDialect = buildHeartPrompt({
+    ...base,
+    event: { ...base.event, dialect: "你说话带台湾腔，句尾爱落哦、啦、齁。" },
+  });
+  assert.match(withDialect, /你说话带一点口癖/);
+  assert.match(withDialect, /台湾/);
+  // 不带方言：不出现“口癖”引导块（正反例对照里的“齁/哦”是示例语气，不算方言注入）
+  const withoutDialect = buildHeartPrompt(base);
+  assert.doesNotMatch(withoutDialect, /口癖/);
+  assert.doesNotMatch(withoutDialect, /你说话带一点口癖/);
+});
+
+test("buildHeartPrompt: 含霸总别扭版 vs 自然版正反例对照", () => {
+  const prompt = buildHeartPrompt({
+    partnerName: "悠米",
+    description: "感性助手",
+    voiceDescription: "柔和坚定",
+    memory: "",
+    userName: "朋友",
+    event: { eventType: "gift", id: "bouquet", name: "一束花", icon: "💐" },
+    temperament: { surfaceTag: "温柔", innerTag: "大方" },
+  });
+  // 别扭版在提示词里作为“禁止模仿”出现
+  assert.match(prompt, /别扭版（禁止模仿）/);
+  assert.match(prompt, /我懒得调，你回来看不顺眼再自己摆/);
+  // 自然版作为参考
+  assert.match(prompt, /自然版（参考这版的落点和语气）/);
+  assert.match(prompt, /花我插窗边那个瓶子里了哦/);
+  // 明确要求选第二种
+  assert.match(prompt, /你要的是第二种/);
 });
 
 test("publicHeart: 只暴露展示所需字段，不再带回复或回礼入口", () => {
