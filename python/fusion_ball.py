@@ -625,7 +625,7 @@ class FusionBall(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setFixedSize(BALL_W, BALL_H)
 
-        self.pix_branch = self._render_svg(os.path.join(ZHUJIAN_DIR, "yinghua-branch.svg"))
+        self.pix_branch = self._render_svg(os.path.join(FENGLING_DIR, "yinghua-branch-slim.svg"))
         self.pix_flower = self._render_svg(os.path.join(ZHUJIAN_DIR, "yinghua-ball.svg"))
         self.pix_leaf = self._render_svg(os.path.join(ZHUJIAN_DIR, "yinghua-leaf.svg"))
         self.pix_bell = self._render_svg(os.path.join(FENGLING_DIR, "fengling-bell.svg"))
@@ -714,6 +714,7 @@ class FusionBall(QWidget):
         self.pinned_target = None
         self.theme_mode = _ORIGINAL_ZHUJIAN.read_hana_theme_mode()
         self.read_panel = None
+        self.ask_flower_dialog = None  # 「问问小花」输入弹窗（右键菜单打开，懒创建）
 
         # 交互状态
         self.hovered = False
@@ -731,8 +732,10 @@ class FusionBall(QWidget):
         self._press_flower = False
         self._drag_menu_was_visible = False
         self._drag_read_was_visible = False
+        self._drag_ask_was_visible = False
         self._drag_menu_start = None
         self._drag_read_start = None
+        self._drag_ask_start = None
         self._drag_ball_start = None
         self.menu = None
         self.context_menu = None
@@ -1495,6 +1498,8 @@ class FusionBall(QWidget):
             )
             self._drag_read_was_visible = bool(self.read_panel and self.read_panel.isVisible())
             self._drag_read_start = self.read_panel.pos() if self._drag_read_was_visible else None
+            self._drag_ask_was_visible = bool(self.ask_flower_dialog and self.ask_flower_dialog.isVisible())
+            self._drag_ask_start = self.ask_flower_dialog.pos() if self._drag_ask_was_visible else None
             # FusionMenu.isVisible() also includes ReadPanel；朗读窗打开时不能把它当普通页面重新锚定。
             self._drag_menu_was_visible = bool(
                 self.menu and self.menu.isVisible() and not self._drag_read_was_visible
@@ -1526,6 +1531,8 @@ class FusionBall(QWidget):
             delta = current - self._press_global
             if self._drag_read_was_visible and self.read_panel is not None:
                 self._sync_dragged_read_panel(delta)
+            elif self._drag_ask_was_visible and self.ask_flower_dialog is not None:
+                self._sync_dragged_ask_dialog(delta)
             else:
                 self.move(current - self._drag)
                 self._snap()
@@ -1545,12 +1552,16 @@ class FusionBall(QWidget):
                 self._snap()
                 if self._drag_read_was_visible and self.read_panel is not None:
                     self._sync_dragged_read_panel()
+                elif self._drag_ask_was_visible and self.ask_flower_dialog is not None:
+                    self._sync_dragged_ask_dialog()
                 elif self._drag_menu_was_visible and self.menu is not None:
                     self.menu.move_to_ball()
                 if self.context_menu is not None and self.context_menu.isVisible():
                     self.context_menu.move_to_ball()
             elif self._drag_read_was_visible and self.read_panel is not None and self.read_panel.isVisible():
                 self.read_panel.close()
+            elif self._drag_ask_was_visible and self.ask_flower_dialog is not None and self.ask_flower_dialog.isVisible():
+                self.ask_flower_dialog.close()
             elif self._drag_menu_was_visible and self.menu is not None and self.menu.isVisible():
                 self.menu.close_once()
             else:
@@ -1563,12 +1574,36 @@ class FusionBall(QWidget):
             self._press_flower = False
             self._drag_menu_was_visible = False
             self._drag_read_was_visible = False
+            self._drag_ask_was_visible = False
             self._drag_menu_start = None
             self._drag_read_start = None
+            self._drag_ask_start = None
             self._drag_ball_start = None
         elif event.button() == Qt.MouseButton.RightButton:
             self._open_context(event.globalPosition().toPoint())
         event.accept()
+
+    def _sync_dragged_ask_dialog(self, desired_delta=None):
+        """问问小花弹窗被用户拖到自定义位置后，融合球拖动仍保持当前相对偏移。"""
+        if self.ask_flower_dialog is None or self._drag_ball_start is None or self._drag_ask_start is None:
+            return
+        delta = desired_delta if desired_delta is not None else self.pos() - self._drag_ball_start
+        screen = self.screen() or QApplication.primaryScreen()
+        if screen is None:
+            return
+        geo = screen.availableGeometry()
+        dx, dy = _ORIGINAL_ZHUJIAN.clamp_pair_drag(
+            delta.x(), delta.y(),
+            (self._drag_ball_start.x(), self._drag_ball_start.y(), self.width(), self.height()),
+            (self._drag_ask_start.x(), self._drag_ask_start.y(), self.ask_flower_dialog.width(), self.ask_flower_dialog.height()),
+            (geo.left(), geo.top(), geo.right() + 1, geo.bottom() + 1),
+        )
+        self.move(self._drag_ball_start + QPoint(dx, dy))
+        self.ask_flower_dialog._user_dragged = True
+        self.ask_flower_dialog.move(self._drag_ask_start + QPoint(dx, dy))
+        if not self.ask_flower_dialog.isVisible():
+            self.ask_flower_dialog.show()
+            self.ask_flower_dialog.raise_()
 
     def _sync_dragged_read_panel(self, desired_delta=None):
         """朗读窗被用户拖到自定义位置后，融合球拖动仍保持当前相对偏移。"""
@@ -1923,6 +1958,9 @@ class FusionBall(QWidget):
 
     # ── 面板与全局控制 ──
     def _toggle_menu(self):
+        if self.ask_flower_dialog is not None and self.ask_flower_dialog.isVisible():
+            self.ask_flower_dialog.close()
+            return
         if self.read_panel is not None and self.read_panel.isVisible():
             self.read_panel.close()
             return
@@ -2014,6 +2052,8 @@ class FusionBall(QWidget):
             self.context_menu.close_once()
         if self.read_panel is not None:
             self.read_panel.close()
+        if self.ask_flower_dialog is not None:
+            self.ask_flower_dialog.close()
         if self._event_filter_installed and QApplication.instance() is not None:
             QApplication.instance().removeEventFilter(self)
         super().closeEvent(event)
@@ -2413,6 +2453,7 @@ class FusionFenglingMenu(OriginalFenglingMenu):
     def _do_action(self, vtype, item_id):
         self._fusion_action_seq += 1
         seq = self._fusion_action_seq
+        target_revision = getattr(self.ball, "target_revision", 0)
         self._set_busy(True)
         self._flash("正在送出…")
         self.lbl_feedback.repaint()
@@ -2439,7 +2480,12 @@ class FusionFenglingMenu(OriginalFenglingMenu):
                 except Exception:
                     pass
             try:
-                self.action_ready.emit({"seq": seq, "result": result or {}, "catalog": catalog})
+                self.action_ready.emit({
+                    "seq": seq,
+                    "target_revision": target_revision,
+                    "result": result or {},
+                    "catalog": catalog,
+                })
             except RuntimeError:
                 pass
 
@@ -2455,7 +2501,8 @@ class FusionFenglingMenu(OriginalFenglingMenu):
             self.ball.catalog = catalog
             self._update_jar()
         if result.get("success") or result.get("ok"):
-            if result.get("target"):
+            target_state_current = payload.get("target_revision", getattr(self.ball, "target_revision", 0)) == getattr(self.ball, "target_revision", 0)
+            if result.get("target") and target_state_current:
                 target = result.get("target")
                 self.ball.target = target
                 self.ball.target_mode = "pinned" if target.get("mode") == "pinned" else "auto"

@@ -197,7 +197,8 @@ test("跳过闲不住自推送的送达文本：被推送过的窗口不凭它�
         "2026-08-07T13:00:00.000Z",
         "📬 收到来自朋友的一份回礼：🎵轻轻哼着歌～ 这是对你之前留下的「给窗台的茉莉浇水」的回应。",
       ),
-      sessionLine("assistant", "2026-08-07T13:01:00.000Z"),
+      sessionLine("user", "2026-08-07T14:00:00.000Z", "突然想到：一只会写代码的猫最喜欢哪种语言？喵语。"),
+      sessionLine("assistant", "2026-08-07T14:01:00.000Z"),
     ].join("\n") + "\n",
     "utf-8",
   );
@@ -218,4 +219,46 @@ test("跳过闲不住自推送的送达文本：被推送过的窗口不凭它�
     picked.endsWith("B.jsonl"),
     "自推送的送达文本不应顶掉真实活跃窗口，应选 B，实际 " + picked,
   );
+});
+
+test("兼容旧格式消息并跳过非法时间戳，不让坏行阻断扫描", async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "wv-sess-"));
+  const sessionsDir = path.join(home, "agents", "hanako", "sessions");
+  fs.mkdirSync(sessionsDir, { recursive: true });
+  const fp = path.join(sessionsDir, "legacy.jsonl");
+  fs.writeFileSync(
+    fp,
+    [
+      JSON.stringify({ role: "user", ts: 1_786_000_000, content: "旧格式真实消息" }),
+      JSON.stringify({ role: "user", timestamp: "definitely-not-a-date", content: "坏时间戳" }),
+    ].join("\n") + "\n",
+    "utf-8",
+  );
+  const mod = await freshDataModule(home);
+  assert.equal(mod.findLatestSessionPath("hanako"), fp);
+});
+
+test("粗筛边界包含第 60 个会话候选，不因边界截断漏掉真实用户消息", async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "wv-sess-"));
+  const sessionsDir = path.join(home, "agents", "hanako", "sessions");
+  fs.mkdirSync(sessionsDir, { recursive: true });
+  const base = Date.parse("2026-08-07T20:00:00.000Z");
+
+  for (let i = 0; i < 59; i++) {
+    makeSession(sessionsDir, `assistant-${String(i).padStart(2, "0")}.jsonl`, {
+      assistantAt: "2026-08-07T20:00:00.000Z",
+      mtime: new Date(base - i * 1000).toISOString(),
+    });
+  }
+  const boundary = makeSession(sessionsDir, "boundary.jsonl", {
+    userAt: "2026-08-07T19:00:00.000Z",
+    mtime: new Date(base - 59 * 1000).toISOString(),
+  });
+  makeSession(sessionsDir, "outside.jsonl", {
+    assistantAt: "2026-08-07T20:00:00.000Z",
+    mtime: new Date(base - 60 * 1000).toISOString(),
+  });
+
+  const mod = await freshDataModule(home);
+  assert.equal(mod.findLatestSessionPath("hanako"), boundary);
 });

@@ -197,7 +197,7 @@ class FenglingInteractionTests(unittest.TestCase):
             menu = fengling_app.FenglingMenu(self.ball)
             menu.refresh()
         self.assertIsInstance(menu.lbl_target, QLabel)
-        self.assertEqual(menu.lbl_target.text(), "跟随当前对话 · 小花")
+        self.assertEqual(menu.lbl_target.text(), "跟随最近活跃的对话 · 小花")
         self.assertTrue(hasattr(menu, "btn_interact"))
         self.assertTrue(hasattr(menu, "btn_gift"))
         self.assertFalse(hasattr(menu, "btn_prank"))
@@ -211,6 +211,18 @@ class FenglingInteractionTests(unittest.TestCase):
         corner = image.pixelColor(0, 0)
         self.assertEqual(center.alpha(), 255, "菜单纸面背景不能透成桌面底色")
         self.assertEqual(corner.alpha(), 0, "圆角外侧必须保持透明，不能露出方形底框")
+        menu.close()
+
+    def test_target_label_echoes_conversation_title_when_available(self):
+        def titled_get(path, timeout=5):
+            if path == "/catalog":
+                return CATALOG
+            return {"ok": True, "target": {"id": "hanako", "name": "小花", "title": "正在改目标选择"}}
+
+        with patch.object(fengling_app, "api_get", side_effect=titled_get):
+            menu = fengling_app.FenglingMenu(self.ball)
+            menu.refresh()
+        self.assertIn("正在改目标选择", menu.lbl_target.text())
         menu.close()
 
     def test_target_selector_requires_agent_before_showing_top_five_sessions(self):
@@ -263,6 +275,19 @@ class FenglingInteractionTests(unittest.TestCase):
         with patch.object(menu.target_menu, "refresh_async") as refresh:
             menu._toggle_target_menu()
         refresh.assert_called_once_with()
+        menu.close()
+
+    def test_target_selector_error_offers_retry_button(self):
+        menu = fengling_app.FenglingMenu(self.ball)
+        selector = menu.target_menu
+        selector.view_mode = "manual"
+        selector.error = "读取失败，可以重新读取"
+        selector._sync_ui()
+        retry = [
+            button for button in selector.findChildren(QPushButton)
+            if button.objectName() == "targetItem" and button.text() == "↻ 重新读取"
+        ]
+        self.assertEqual(len(retry), 1)
         menu.close()
 
     def test_target_selector_pins_the_chosen_session_for_original_panel(self):
@@ -801,7 +826,7 @@ class FenglingInteractionTests(unittest.TestCase):
         with patch.object(fengling_app, "api_get", side_effect=fake_missing):
             menu = fengling_app.FenglingMenu(self.ball)
             menu.refresh()
-        self.assertEqual(menu.lbl_target.text(), "跟随当前对话 · 暂未找到")
+        self.assertEqual(menu.lbl_target.text(), "跟随最近活跃的对话 · 暂未找到")
         menu.close()
 
     def test_success_reply_refreshes_displayed_target(self):
@@ -816,7 +841,7 @@ class FenglingInteractionTests(unittest.TestCase):
             menu, "_refresh_jar"
         ):
             menu._do_action("interact", "quiet")
-        self.assertEqual(menu.lbl_target.text(), "跟随当前对话 · 伙伴B")
+        self.assertEqual(menu.lbl_target.text(), "跟随最近活跃的对话 · 伙伴B")
         self.assertEqual(menu.lbl_feedback.text(), "送达了")
         menu.close()
 

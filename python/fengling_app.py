@@ -59,6 +59,12 @@ HANA_HOME = os.environ.get("HANA_HOME", os.path.join(os.path.expanduser("~"), ".
 STATE_PATH = os.path.join(HANA_HOME, "data", "work-visit", "fengling-state.json")
 AUDIO_CACHE_DIR = os.path.join(HANA_HOME, "data", "work-visit", "fengling-audio-cache")
 HERE = os.path.dirname(os.path.abspath(__file__))
+# 风铃进程 PID 文件：闲不住侧以「这个文件里存活的 PID」作为风铃是否在跑的事实源，
+# 避免 Hana 重启/插件重载后插件丢句柄、却不知道球还飘在桌面上的失忆状态。
+PID_PATH = os.path.join(HANA_HOME, "data", "work-visit", "fengling.pid")
+# 失联自愈计数器：代理连续失联到阈值后自动退出，不留孤儿球。
+_liveness_misses = 0
+_LIVENESS_MAX_MISSES = 12   # 约 60 秒（配合 5s 轮询）内全部请求失败即视为失联
 
 # 碰撞音色池只生成一次，所有风铃实例共享（wav bytes 不可变，安全）。
 _CHIME_POOL_CACHE = None
@@ -728,6 +734,21 @@ def prepare_sound_file(data, volume, cache_dir=AUDIO_CACHE_DIR):
 # ─────────────────────────────
 #  HTTP 客户端（标准库，零额外依赖）
 # ─────────────────────────────
+def _liveness_error(e):
+    """判断一次请求失败是否属于『结构失联』：token 失效 / 代理没起来 / 连不上。
+    业务错误（409 没找到目标、500 内部错误等）不算，不触发自愈。"""
+    if isinstance(e, urllib.error.HTTPError):
+        return e.code in (401, 403, 404)
+    if isinstance(e, (urllib.error.URLError, OSError, TimeoutError)):
+        return True
+    return False
+
+
+def _mark_liveness(ok):
+    global _liveness_misses
+    _liveness_misses = 0 if ok else _liveness_misses + 1
+
+
 def _headers():
     h = {"Content-Type": "application/json"}
     if API_TOKEN:
@@ -737,8 +758,15 @@ def _headers():
 
 def api_get(path, timeout=5):
     req = urllib.request.Request(API_BASE + path, headers=_headers(), method="GET")
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        return json.loads(r.read().decode("utf-8"))
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            data = json.loads(r.read().decode("utf-8"))
+        _mark_liveness(True)
+        return data
+    except Exception as error:
+        if _liveness_error(error):
+            _mark_liveness(False)
+        raise
 
 
 def api_post(path, payload, timeout=12):
@@ -748,8 +776,55 @@ def api_post(path, payload, timeout=12):
         headers=_headers(),
         method="POST",
     )
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        return json.loads(r.read().decode("utf-8"))
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            data = json.loads(r.read().decode("utf-8"))
+        _mark_liveness(True)
+        return data
+    except Exception as error:
+        if _liveness_error(error):
+            _mark_liveness(False)
+        raise
+
+
+# ─────────────────────────────
+#  PID 文件（给闲不住侧做状态探测的握手）
+# ─────────────────────────────
+def write_pid_file():
+    """启动时写下自己的 PID；闲不住插件靠它认领/探测风铃是否在跑。"""
+    try:
+        os.makedirs(os.path.dirname(PID_PATH), exist_ok=True)
+        with open(PID_PATH, "w", encoding="ascii") as f:
+            f.write(str(os.getpid()))
+        return True
+    except Exception as error:
+        print(f"[风铃] 写 PID 失败: {error}", file=sys.stderr)
+        return False
+
+
+def clear_pid_file():
+    """退出时清理 PID 文件，避免残留让闲不住误判。仅当文件确实是自己的 PID 才删。"""
+    try:
+        cur = str(os.getpid())
+        with open(PID_PATH, "r", encoding="ascii") as f:
+            if f.read().strip() != cur:
+                return
+        os.remove(PID_PATH)
+    except Exception:
+        pass
+
+
+def start_liveness_watchdog(interval_ms=5000):
+    """代理完全失联约 60 秒后自动退出，不让坏球一直飘在桌面上。"""
+    def check():
+        if _liveness_misses >= _LIVENESS_MAX_MISSES:
+            print(f"[风铃] 与闲不住本地代理失去联系 {_liveness_misses} 次，自动退出", file=sys.stderr)
+            QApplication.instance().quit()
+    timer = QTimer()
+    timer.timeout.connect(check)
+    timer.start(interval_ms)
+    timer.setParent(QApplication.instance())
+    return timer
 
 
 def load_state():
@@ -881,7 +956,7 @@ class FenglingBall(QWidget):
         self.state = load_state()
         self.catalog = None          # 礼物/互动/恶作剧清单 + 光粒
         self.target = None           # 当前目标会话
-        self.target_mode = "auto"    # auto=自动判断 / pinned=固定某段对话
+        self.target_mode = "auto"    # auto=跟随最近 / pinned=固定某段对话
         self.pinned_target = None    # {agentId, sessionPath, title} 或 None
         self.current_heart = None    # 待用户点击查看的当前心意
         self.heart_queue = []        # 服务端未读且未收起的心意，最新在前
@@ -1805,7 +1880,7 @@ class FenglingContextMenu(FadeOnLeaveMixin, QMenu):
 #  目标会话选择面板
 # ─────────────────────────────
 class TargetMenu(QFrame):
-    """自动判断 / 先按助手再选对话；固定结果写入插件数据。"""
+    """跟随最近 / 先按助手再选对话；固定结果写入插件数据。"""
 
     data_ready = pyqtSignal(object)
 
@@ -1837,7 +1912,7 @@ class TargetMenu(QFrame):
 
         mode_row = QHBoxLayout()
         mode_row.setSpacing(6)
-        self.btn_auto = QPushButton("自动判断")
+        self.btn_auto = QPushButton("跟随最近")
         self.btn_auto.setObjectName("targetMode")
         self.btn_auto.clicked.connect(self._pick_auto)
         mode_row.addWidget(self.btn_auto)
@@ -1912,7 +1987,7 @@ class TargetMenu(QFrame):
         self._clear_list()
 
         if not manual:
-            self.lbl_hint.setText("每次点击时自动判断最近活跃的对话")
+            self.lbl_hint.setText("每次点击时跟随最近活跃的对话")
             return
         if self.selected_agent_id:
             agent_name = next(
@@ -1928,6 +2003,11 @@ class TargetMenu(QFrame):
             return
         if self.error:
             self._add_hint(self.error)
+            retry = QPushButton("↻ 重新读取")
+            retry.setObjectName("targetItem")
+            retry.setCursor(Qt.CursorShape.PointingHandCursor)
+            retry.clicked.connect(lambda _=False: self.refresh_async())
+            self.list_box.addWidget(retry)
             return
         if not self.selected_agent_id:
             if not self.agents:
@@ -2009,7 +2089,7 @@ class TargetMenu(QFrame):
         self.ball.pinned_target = None
         self.panel._pinned_expires_in_ms = 0
         self.panel._sync_target_state()
-        self.panel._flash("已改为自动判断活跃窗口 ✓")
+        self.panel._flash("已改为跟随最近活跃的对话 ✓")
         self.panel._set_target_selector_visible(False)
 
     def _pick(self, session):
@@ -2055,7 +2135,7 @@ class TargetMenu(QFrame):
         self._sync_ui()
 
         def worker():
-            payload = {"seq": request_seq, "agents": [], "sessions": [], "error": "读取失败，关闭后重开再试"}
+            payload = {"seq": request_seq, "agents": [], "sessions": [], "error": "读取失败，可以重新读取"}
             try:
                 if self.view_mode == "manual" and not self.selected_agent_id:
                     data = api_get("/agents", timeout=5)
@@ -2233,7 +2313,7 @@ class FenglingMenu(FadeOnLeaveMixin, QFrame):
         # 当前目标展示；点右侧按钮打开自动 / 手动选择面板。
         target_row = QHBoxLayout()
         target_row.setSpacing(6)
-        self.lbl_target = QLabel("跟随当前对话 · 正在读取")
+        self.lbl_target = QLabel("跟随最近活跃的对话 · 正在读取")
         self.lbl_target.setObjectName("target")
         target_row.addWidget(self.lbl_target, 1)
         self.btn_target = QPushButton("选择对话 ▾")
@@ -2512,19 +2592,29 @@ class FenglingMenu(FadeOnLeaveMixin, QFrame):
             if not target:
                 self.lbl_target.setText("固定对话 · 暂未找到")
                 return
+            name = target.get("name", target.get("id", "?"))
+            title = str(target.get("title") or "").strip()
             remain = self._pinned_expires_in_ms
-            base = f"固定对话 · {target.get('name', target.get('id', '?'))}"
+            base = f"固定对话 · {name}"
+            if title:
+                base += f" · {title[:20]}"
             if remain and remain > 0:
-                base = f"已固定 · {target.get('name', target.get('id', '?'))}（剩{remain / 3600000.0:.1f}小时）"
+                base = f"已固定 · {name}"
+                if title:
+                    base += f" · {title[:20]}"
+                base += f"（剩{remain / 3600000.0:.1f}小时）"
             self.lbl_target.setText(base)
             return
-        self.btn_target.setText("自动选择 ▴" if self.target_menu.isVisible() else "自动选择 ▾")
+        self.btn_target.setText("选择对话 ▴" if self.target_menu.isVisible() else "选择对话 ▾")
         if not target:
-            self.lbl_target.setText("跟随当前对话 · 暂未找到")
+            self.lbl_target.setText("跟随最近活跃的对话 · 暂未找到")
             return
-        self.lbl_target.setText(
-            f"跟随当前对话 · {target.get('name', target.get('id', '?'))}"
-        )
+        name = target.get("name", target.get("id", "?"))
+        title = str(target.get("title") or "").strip()
+        base = f"跟随最近活跃的对话 · {name}"
+        if title:
+            base += f" · {title[:20]}"
+        self.lbl_target.setText(base)
 
     def _update_jar(self):
         cat = self.ball.catalog
@@ -2772,8 +2862,12 @@ def main():
     )
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
+    write_pid_file()
+    import atexit
+    atexit.register(clear_pid_file)
     ball = FenglingBall()
     ball.show()
+    start_liveness_watchdog()
     sys.exit(app.exec())
 
 
