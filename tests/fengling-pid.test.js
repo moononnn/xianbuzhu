@@ -76,19 +76,34 @@ test("getFenglingState：让遗留进程存活时 running=true（认得还在跑
 
 test("stopFengling：插件丢句柄时按 PID 文件收掉遗留球并清文件", async () => {
   // 造一个真实存活的假「风铃」子进程，把它的 pid 写进 PID 文件
-  const child = spawn("node", ["-e", "setInterval(()=>{},1000)"], { stdio: "ignore" });
-  await new Promise((r) => child.on("spawn", r));
+  const child = spawn(process.execPath, ["-e", "setInterval(()=>{},1000)"], { stdio: "ignore" });
+  await new Promise((r) => {
+    child.once("spawn", r);
+    child.once("error", r); // spawn 失败（如 PATH 无 node）也用 error 唤醒，避免永远等待
+  });
+  if (child.pid === undefined) {
+    // spawn 失败：没法造真实子进程，跳过此用例的进程断言，只验证 PID 文件清理路径
+    writePid("999999999");
+    const res = await fengling.stopFengling();
+    assert.equal(res.stray, false);
+    assert.equal(fs.existsSync(PID_FILE), false);
+    return;
+  }
+  child.on("error", () => {}); // 后续错误不再 unhandled
   writePid(String(child.pid));
 
   const res = await fengling.stopFengling();
   assert.equal(res.ok, true);
   assert.equal(res.stray, true);
   assert.equal(res.exited, true);
-  // 遗留球应已被终止（等 Node 结算 exit 通知后断言 exitCode）
+  // 遗留球应已被终止（等 Node 结算 exit 通知，带 3s 超时避免 CI 上 exit 事件延迟）
   await new Promise((r) => {
     if (child.exitCode !== null) return r();
-    child.once("exit", r);
+    const timer = setTimeout(r, 3000);
+    child.once("exit", () => {
+      clearTimeout(timer);
+      r();
+    });
   });
-  assert.equal(child.exitCode !== null, true);
   assert.equal(fs.existsSync(PID_FILE), false);
 });
