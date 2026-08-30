@@ -13,7 +13,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-      - run: node --test --test-concurrency=1 tests/*.test.js
+      - name: JS 回归测试（串行 + 单测超时兜底）
+        run: |
+          node --version
+          node --test --test-concurrency=1 --test-timeout=30000 tests/*.test.js
       - name: 安装风铃 Python 依赖（PyQt6 + 系统库 + xvfb）
         run: |
           sudo apt-get update
