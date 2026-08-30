@@ -236,7 +236,7 @@ test("buildHeartPrompt: 有引子时注入最近话题，无引子时保持原�
     description: "温柔",
     voiceDescription: "从具体动作开始",
     memory: "",
-    userName: "玥儿",
+    userName: "朋友",
     event: { id: "sticky-note", name: "便签", icon: "📝", eventType: "scene" },
     temperament: { surfaceTag: "温柔", innerTag: "温柔" },
   };

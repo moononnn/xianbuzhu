@@ -481,7 +481,7 @@ test("方言口癖：能提取方言块并生成腔调引导，没配则零变�
 
 test("buildHeartPrompt: 方言块注入提示词，无方言时完全不带方言内容", () => {
   const base = {
-    partnerName: "悠米",
+    partnerName: "朋友A",
     description: "感性助手，柔和而坚定的老朋友风格",
     voiceDescription: "温暖且敏锐，擅长共情和洞察",
     memory: "",
@@ -504,7 +504,7 @@ test("buildHeartPrompt: 方言块注入提示词，无方言时完全不带方�
 
 test("buildHeartPrompt: 含霸总别扭版 vs 自然版正反例对照", () => {
   const prompt = buildHeartPrompt({
-    partnerName: "悠米",
+    partnerName: "朋友A",
     description: "感性助手",
     voiceDescription: "柔和坚定",
     memory: "",
