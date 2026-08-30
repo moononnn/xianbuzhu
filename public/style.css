@@ -532,6 +532,12 @@ button:disabled,
   white-space: nowrap;
 }
 
+/* 滚动条统一：细薄荷圆条（2026-08-26，与全部插件同一规范，横竖皆然） */
+*::-webkit-scrollbar{width:8px;height:8px}
+*::-webkit-scrollbar-track{background:transparent}
+*::-webkit-scrollbar-thumb{background:#c9dfd3;border-radius:99px;border:2px solid var(--paper)}
+*::-webkit-scrollbar-thumb:hover{background:#5dae8e}
+*{scrollbar-width:thin;scrollbar-color:#c9dfd3 transparent}
 .partner-list {
   display: flex;
   flex: 1 1 auto;
@@ -543,23 +549,6 @@ button:disabled,
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
-  scrollbar-color: var(--line-strong) transparent;
-  scrollbar-width: thin;
-}
-
-.partner-list::-webkit-scrollbar,
-.notes-list::-webkit-scrollbar,
-.llm-form::-webkit-scrollbar,
-#modal-deco-list::-webkit-scrollbar {
-  width: 6px;
-}
-
-.partner-list::-webkit-scrollbar-thumb,
-.notes-list::-webkit-scrollbar-thumb,
-.llm-form::-webkit-scrollbar-thumb,
-#modal-deco-list::-webkit-scrollbar-thumb {
-  border-radius: 99px;
-  background: var(--line-strong);
 }
 
 .partner-list-empty {
@@ -1516,8 +1505,6 @@ button:disabled,
   padding: 14px 18px 20px;
   overflow-y: auto;
   overscroll-behavior: contain;
-  scrollbar-color: var(--line-strong) transparent;
-  scrollbar-width: thin;
 }
 
 .notes-empty {
@@ -1663,8 +1650,6 @@ button:disabled,
   padding-right: 4px;
   overflow-y: auto;
   overscroll-behavior: contain;
-  scrollbar-color: var(--line-strong) transparent;
-  scrollbar-width: thin;
 }
 
 .llm-row {
@@ -2612,8 +2597,6 @@ button:disabled,
   padding-right: 4px;
   overflow-y: auto;
   overscroll-behavior: contain;
-  scrollbar-color: var(--line-strong) transparent;
-  scrollbar-width: thin;
 }
 .temperament-intro { margin-bottom: 14px; color: var(--ink-2); font-size: 12px; line-height: 1.6; }
 .temperament-group { margin-bottom: 14px; }

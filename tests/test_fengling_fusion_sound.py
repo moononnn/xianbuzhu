@@ -48,6 +48,32 @@ class FenglingFusionSoundTests(unittest.TestCase):
         )
         self.assertTrue(hasattr(fusion_ball._ORIGINAL_FENGLING, "TargetMenu"))
 
+    def test_fusion_action_does_not_restore_target_from_before_a_switch(self):
+        menu = fusion_ball.FusionFenglingMenu.__new__(fusion_ball.FusionFenglingMenu)
+        menu.ball = type("Ball", (), {
+            "target_revision": 2,
+            "target": {"id": "new", "title": "新目标"},
+            "target_mode": "pinned",
+            "pinned_target": {"sessionPath": "new.jsonl"},
+        })()
+        menu._fusion_action_seq = 1
+        menu._set_busy = MagicMock()
+        menu._flash = MagicMock()
+        menu._update_target_label = MagicMock()
+        menu._apply_fusion_action({
+            "seq": 1,
+            "target_revision": 1,
+            "result": {
+                "success": True,
+                "target": {"id": "old", "mode": "auto", "pinned": None},
+            },
+            "catalog": None,
+        })
+        self.assertEqual(menu.ball.target["id"], "new")
+        self.assertEqual(menu.ball.target_mode, "pinned")
+        self.assertEqual(menu.ball.pinned_target["sessionPath"], "new.jsonl")
+        menu._update_target_label.assert_not_called()
+
     def test_fusion_reads_the_persisted_volume_before_environment_fallback(self):
         self.assertEqual(
             fusion_ball.resolve_fusion_sound_volume({"soundVolume": 0.65}),
