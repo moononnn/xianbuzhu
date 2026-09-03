@@ -155,6 +155,34 @@ test("状态收藏：自动临时状态不被付费锁拦住", () => {
   assert.equal(result.current.id, "brain-meeting");
 });
 
+test("状态收藏：从未解锁过的伙伴补齐空数组，不免费继承旧全局解锁标记", () => {
+  const data = fixture();
+  // 模拟老数据：另一个伙伴从未迁移过，没有 unlockedStatuses 字段；
+  // 同时状态库全局定义被标记成旧版已解锁（旧格式可能残留），
+  // 断言伙伴不会免费继承这份全局解锁。
+  data.partnerConfig.other = { name: "另一位伙伴" };
+  const paidId = PAID_PUBLIC_STATUS_IDS[0];
+  const paid = data.statusLibrary.public.find((item) => item.id === paidId);
+  if (paid) paid.unlocked = true; // 旧版全局解锁标记
+
+  // ensureStatusState 在读取收藏时自动补齐空数组
+  const collection = getPublicStatusCollection(data, "other");
+  const target = collection.find((item) => item.id === paidId);
+  assert.equal(target.unlocked, false, "未付费伙伴不能继承旧全局解锁标记");
+  assert.ok(Array.isArray(data.partnerConfig.other.unlockedStatuses), "迁移后应补上空数组");
+  assert.equal(data.partnerConfig.other.unlockedStatuses.length, 0);
+
+  // 补齐后手动换锁定状态仍会被拒，解锁也要真扣钱
+  const manual = setPartnerStatus(data, "other", { statusId: paidId });
+  assert.equal(manual.ok, false);
+  data.jar = STATUS_UNLOCK_COST;
+  const unlock = unlockPublicStatus(data, "other", paidId);
+  assert.equal(unlock.ok, true);
+  assert.equal(unlock.alreadyOwned, false, "全局标记不能被当成已拥有免费白嫖");
+  assert.equal(data.jar, 0);
+  assert.deepEqual(data.partnerConfig.other.unlockedStatuses, [paidId]);
+});
+
 test("卡面/称号装饰迁移：保留头像框，移除旧 cardBg 与称号字段", () => {
   assert.deepEqual(
     normalizeDecorationState({

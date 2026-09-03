@@ -337,7 +337,9 @@ test("unlock-status: 写盘失败时不把扣款和解锁留在内存或磁盘",
     assert.equal(output.buyBody.success, false, "装饰写盘失败也不能谎报成功");
     assert.equal(output.jar, 800, "写盘失败不能扣掉磁盘上的光粒");
     assert.equal(output.unlocked, false, "写盘失败不能留下全局解锁状态");
-    assert.equal(output.partnerUnlocks, undefined, "写盘失败不能留下伙伴解锁结果");
+    // 磁盘数据经 loadData 迁移后可能补了空数组，但绝不能带上解锁记录。
+    assert.ok(Array.isArray(output.partnerUnlocks) ? output.partnerUnlocks.length === 0 : output.partnerUnlocks === undefined,
+      "写盘失败不能留下伙伴解锁结果");
     assert.equal(output.decorations, undefined, "装饰写盘失败不能留下购买结果");
   } finally {
     fs.rmSync(temp, { recursive: true, force: true });

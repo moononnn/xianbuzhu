@@ -1150,7 +1150,6 @@
     var categories = ['avatarFrame', 'status'];
     if (categories.indexOf(category) >= 0) state.decorationCategory = category;
     if (categories.indexOf(state.decorationCategory) < 0) state.decorationCategory = 'avatarFrame';
-    var currentCategory = state.decorationCategory;
     if (!state.selectedPartnerId) { toast('先选一个助手', 'error'); return; }
 
     var overlay = $('#modal-overlay');
@@ -1162,8 +1161,9 @@
     var targetLabel = targetSection ? targetSection.querySelector('label') : null;
 
     title.textContent = '装饰商店';
-    if (targetSection) targetSection.style.display = currentCategory === 'status' ? 'none' : '';
-    if (targetLabel) targetLabel.textContent = currentCategory === 'status' ? '当前伙伴' : '给谁装扮？';
+    // 头像框与状态收藏都按伙伴分别拥有/解锁：给谁装扮下拉两个分类都固定显示，切伙伴联动下方列表。
+    if (targetSection) targetSection.style.display = '';
+    if (targetLabel) targetLabel.textContent = '给谁装扮？';
     if (confirm) confirm.style.display = 'none';
     if (cancel) cancel.style.display = 'none';
     if (overlay) overlay.classList.add('deco-open');
