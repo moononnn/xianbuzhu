@@ -732,7 +732,7 @@ test("自主状态：连续两次空返回才记录失败退避，不会无限�
 test("自主状态提示：仅被派活时进入 delegated 模式，引导活人感而非一律专注", () => {
   const prompt = buildAutonomousStatusPrompt({
     partnerId: "yunying",
-    partnerName: "星野",
+    partnerName: "伙伴甲",
     activity: { delegatedTask: "请独立审查闲不住状态池", dispatchedBy: "hanako" },
     catalog: {
       publicStatuses: [
@@ -793,7 +793,7 @@ test("自主状态提示：同一状态占用达到上限时从可选池剔除�
   // 展板上已有 2 人挂“专注”（feiyue/yumi），第 3 人（yunying）可选池应剔除 quiet-work
   const prompt = buildAutonomousStatusPrompt({
     partnerId: "yunying",
-    partnerName: "星野",
+    partnerName: "伙伴甲",
     activity: { delegatedTask: "请独立审查状态池", dispatchedBy: "hanako" },
     boardStatuses: [
       { partnerId: "feiyue", id: "quiet-work", text: "专注" },
@@ -823,7 +823,7 @@ test("自主状态提示：同一状态占用达到上限时从可选池剔除�
 test("自主状态提示：占用未到上限时仍保留同款候选，允许 1~2 人重样", () => {
   const prompt = buildAutonomousStatusPrompt({
     partnerId: "yunying",
-    partnerName: "星野",
+    partnerName: "伙伴甲",
     activity: { delegatedTask: "请独立审查状态池", dispatchedBy: "hanako" },
     boardStatuses: [
       { partnerId: "feiyue", id: "quiet-work", text: "专注" },

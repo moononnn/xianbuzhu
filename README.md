@@ -185,7 +185,7 @@ moononnn & 小花
 
 ## 许可
 
-本项目从 **v3.1.47** 起采用 **PolyForm Noncommercial License 1.0.0**。
+本项目从 **v3.1.48** 起采用 **PolyForm Noncommercial License 1.0.0**。
 这是源码公开的非商业许可，不属于 OSI 定义的开源软件。
 
 - 允许个人和其他非商业目的使用、修改和分发；

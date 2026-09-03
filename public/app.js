@@ -254,9 +254,6 @@
       if (cardStatusText) {
         html += statusBadgeHtml(cardVisibleStatus, ' pc-status-chip');
       }
-      if (equipped.title) {
-        html += '<span class="title-badge">' + escapeHtml(equipped.title) + '</span>';
-      }
       html += '</div>';
       html += '<div class="pc-meta">' + escapeHtml(p.doing || '—') + '</div>';
       html += '</div>';
@@ -296,7 +293,6 @@
     html += '<div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">';
     html += '<h3 id="modal-title"></h3>';
     html += '<div class="modal-section" id="modal-target-section"><label>送给谁？</label><select class="modal-select" id="modal-target"></select></div>';
-    html += '<div class="modal-section" id="modal-title-section" style="display:none"><label>称号文字</label><input class="llm-input" id="modal-title-input" placeholder="如：最佳搭档" maxlength="12"></div>';
     html += '<div class="modal-actions">';
     html += '<button class="modal-btn cancel" onclick="window._tbClose()">取消</button>';
     html += '<button class="modal-btn confirm" id="modal-confirm" onclick="window._tbConfirm()">确认</button>';
@@ -985,10 +981,10 @@
   };
 
   // ─── 装饰商店：分类浏览 ───
-  // 头像框、称号和高级状态收藏都按伙伴分别拥有。
+  // 头像框和高级状态收藏都按伙伴分别拥有。
   window._tbOpenDeco = function(category) {
     // 即使某一类暂时为空也照常打开，分类页自己展示空状态；不能让一份空集合封死整个商店。
-    var categories = ['avatarFrame', 'status', 'title'];
+    var categories = ['avatarFrame', 'status'];
     if (categories.indexOf(category) >= 0) state.decorationCategory = category;
     if (categories.indexOf(state.decorationCategory) < 0) state.decorationCategory = 'avatarFrame';
     var currentCategory = state.decorationCategory;
@@ -1039,9 +1035,7 @@
     var categoryItems = category === 'status'
       ? ((partner && partner.statusCollection) || state.statusCollection || [])
       : (state.decorationItems || []).filter(function(item) {
-        return category === 'title'
-          ? item.type === 'title' || item.type === 'titleEdit'
-          : item.type === 'avatarFrame';
+        return item.type === 'avatarFrame';
       });
 
     var list = document.createElement('div');
@@ -1051,9 +1045,9 @@
     var nav = document.createElement('div');
     nav.className = 'deco-category-nav';
     nav.setAttribute('role', 'tablist');
-    var categoryNames = { avatarFrame: '头像框', status: '状态收藏', title: '称号' };
-    for (var n = 0; n < 3; n++) {
-      var categoryId = ['avatarFrame', 'status', 'title'][n];
+    var categoryNames = { avatarFrame: '头像框', status: '状态收藏' };
+    for (var n = 0; n < 2; n++) {
+      var categoryId = ['avatarFrame', 'status'][n];
       var categoryButton = document.createElement('button');
       categoryButton.type = 'button';
       categoryButton.className = 'deco-category-btn' + (category === categoryId ? ' active' : '');
@@ -1085,10 +1079,9 @@
       var ownedList = pOwned[typeKey] || [];
       var isOwned = !isStatus && typeKey === 'avatarFrame' && ownedList.indexOf(di.id) >= 0;
       var isEquipped = !isStatus && pEquipped[typeKey] === di.id;
-      var titleReady = typeKey !== 'titleEdit' || (pOwned.title || []).length > 0;
       var canBuy = isStatus
         ? false
-        : state.jar >= (Number(di.price) || 0) && titleReady;
+        : state.jar >= (Number(di.price) || 0);
       var statusUnlocked = isStatus && di.unlocked !== false;
 
       var btn = document.createElement('div');
@@ -1108,8 +1101,6 @@
         priceText = '使用中';
       } else if (isOwned) {
         priceText = '换上';
-      } else if (!titleReady) {
-        priceText = '先拥有一个称号';
       } else {
         priceText = '✨ ' + di.price;
       }
@@ -1151,7 +1142,7 @@
         btn.onclick = (function(d) {
           return function() {
             window._tbClose();
-            window._tbBuyDeco(d.id, d.name, d.icon, d.type, d.price);
+            window._tbBuyDeco(d.id, d.name, d.icon, d.price);
           };
         })(di);
       }
@@ -1165,12 +1156,9 @@
     }
     list.appendChild(grid);
 
-    var titleSection = document.getElementById('modal-title-section');
     var overlay = $('#modal-overlay');
     var modal = overlay ? overlay.querySelector('.modal') : null;
-    if (titleSection && titleSection.parentNode) {
-      titleSection.parentNode.insertBefore(list, titleSection);
-    } else if (modal) {
+    if (modal) {
       var actions = modal.querySelector('.modal-actions');
       if (actions) modal.insertBefore(list, actions);
       else modal.appendChild(list);
@@ -1351,8 +1339,6 @@
   window._tbClose = function() {
     var overlay = $('#modal-overlay');
     if (overlay) overlay.classList.remove('show');
-    var titleSection = $('#modal-title-section');
-    if (titleSection) titleSection.style.display = 'none';
     var confirm = $('#modal-confirm');
     if (confirm) {
       confirm.style.display = '';
@@ -1424,13 +1410,11 @@
     var modal = overlay ? overlay.querySelector('.modal') : null;
     var title = document.getElementById('modal-title');
     var targetSection = document.getElementById('modal-target-section');
-    var titleSection = document.getElementById('modal-title-section');
     var confirm = document.getElementById('modal-confirm');
     if (!overlay || !modal || !confirm) return;
     var oldList = document.getElementById('modal-deco-list');
     if (oldList) oldList.remove();
     if (targetSection) targetSection.style.display = 'none';
-    if (titleSection) titleSection.style.display = 'none';
     if (title) title.textContent = (status.icon || '✨') + ' 为 ' + ((partner && partner.name) || '这位伙伴') + ' 解锁';
 
     var note = document.getElementById('modal-deco-confirm-note');
@@ -1472,14 +1456,12 @@
   };
 
   // ─── 购买装饰（弹窗里用）──
-  window._tbBuyDeco = async function(decorationId, name, icon, type, price) {
+  window._tbBuyDeco = async function(decorationId, name, icon, price) {
     var overlay = document.getElementById('modal-overlay');
     if (!overlay) return;
     var title = document.getElementById('modal-title');
     var target = document.getElementById('modal-target');
     var confirm = document.getElementById('modal-confirm');
-    var titleSection = document.getElementById('modal-title-section');
-    var titleInput = document.getElementById('modal-title-input');
 
     title.textContent = icon + ' ' + name;
     target.innerHTML = '';
@@ -1490,78 +1472,36 @@
       if (state.partners[i].id === state.selectedPartnerId) opt.selected = true;
       target.appendChild(opt);
     }
-    if (type === 'title' || type === 'titleEdit') {
-      titleSection.style.display = '';
-      titleInput.value = '';
-      confirm.textContent = '购买 ✨' + price;
-      confirm.className = 'modal-btn confirm';
-      confirm.onclick = async function() {
-        var tid = target.value;
-        var ttext = titleInput.value.trim();
-        if (!tid) { toast('请选择助手', 'error'); return; }
-        if (!ttext) { toast('请输入称号文字', 'error'); return; }
-        confirm.disabled = true;
-        try {
-          var data = await api('/api/buy-decoration', {
-            method: 'POST',
-            body: JSON.stringify({ decorationId: decorationId, target: tid, text: ttext }),
-          });
-          if (data.success) {
-            state.jar = data.jar;
-            if (data.decorations) {
-              for (var i = 0; i < state.partners.length; i++) {
-                if (state.partners[i].id === tid) {
-                  state.partners[i].decorations = data.decorations;
-                  break;
-                }
-              }
-            }
-            toast(icon + ' ' + name + ' 购买成功！');
-            titleSection.style.display = 'none';
-            window._tbClose();
-            render();
-          } else {
-            toast(data.error || '购买失败', 'error');
-            confirm.disabled = false;
+    confirm.textContent = '购买 ✨' + price;
+    confirm.className = 'modal-btn confirm';
+    confirm.onclick = async function() {
+      var tid = target.value;
+      if (!tid) { toast('请选择助手', 'error'); return; }
+      confirm.disabled = true;
+      try {
+        var data = await api('/api/buy-decoration', {
+          method: 'POST',
+          body: JSON.stringify({ decorationId: decorationId, target: tid }),
+        });
+        if (data.success) {
+          state.jar = data.jar;
+          var partner = null;
+          for (var i = 0; i < state.partners.length; i++) {
+            if (state.partners[i].id === tid) { partner = state.partners[i]; break; }
           }
-        } catch (e) {
+          if (data.decorations && partner) partner.decorations = data.decorations;
+          toast(icon + ' ' + name + ' 购买成功！');
+          window._tbClose();
+          render();
+        } else {
+          toast(data.error || '购买失败', 'error');
           confirm.disabled = false;
-          toast(e.message || '购买失败，请再试一次', 'error');
         }
-      };
-    } else {
-      titleSection.style.display = 'none';
-      confirm.textContent = '购买 ✨' + price;
-      confirm.className = 'modal-btn confirm';
-      confirm.onclick = async function() {
-        var tid = target.value;
-        if (!tid) { toast('请选择助手', 'error'); return; }
-        confirm.disabled = true;
-        try {
-          var data = await api('/api/buy-decoration', {
-            method: 'POST',
-            body: JSON.stringify({ decorationId: decorationId, target: tid }),
-          });
-          if (data.success) {
-            state.jar = data.jar;
-            var partner = null;
-            for (var i = 0; i < state.partners.length; i++) {
-              if (state.partners[i].id === tid) { partner = state.partners[i]; break; }
-            }
-            if (data.decorations && partner) partner.decorations = data.decorations;
-            toast(icon + ' ' + name + ' 购买成功！');
-            window._tbClose();
-            render();
-          } else {
-            toast(data.error || '购买失败', 'error');
-            confirm.disabled = false;
-          }
-        } catch (e) {
-          confirm.disabled = false;
-          toast(e.message || '购买失败，请再试一次', 'error');
-        }
-      };
-    }
+      } catch (e) {
+        confirm.disabled = false;
+        toast(e.message || '购买失败，请再试一次', 'error');
+      }
+    };
     overlay.classList.add('show');
   };
 

@@ -766,21 +766,6 @@ button:disabled,
   box-shadow: 0 0 0 3px var(--mint-soft);
 }
 
-.title-badge {
-  display: inline-flex;
-  align-items: center;
-  max-width: 92px;
-  padding: 1px 6px;
-  overflow: hidden;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--rose) 16%, transparent);
-  color: var(--rose-deep);
-  font-family: var(--font-body);
-  font-size: 10px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 /* 头像框：细手绘线稿 + 对角贴纸角标
    边框与角标使用相邻色，避免厚重色带盖住头像和装饰
    七款：花环粉 / 星光薄荷 / 月亮暖黄 / 爱心深玫瑰 / 云朵淡蓝 / 音符暖棕 / 蝴蝶结樱粉 */
@@ -1571,7 +1556,7 @@ button:disabled,
 
 .deco-category-nav {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 6px;
   margin-bottom: 10px;
 }

@@ -90,7 +90,7 @@ test(".bak: 损坏时能回退读取 .bak", async () => {
   assert.equal(recovered.jar, 5, "损坏时应从 .bak 回退到上一次完好版本");
 });
 
-test("loadData: 旧卡面装饰迁移时不误删头像框和称号", async () => {
+test("loadData: 旧卡面/称号装饰迁移时保留头像框、清掉已下架分类", async () => {
   const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "work-visit-deco-migrate-"));
   const { loadData } = await freshDataModule(tmpHome);
   const dataDir = path.join(tmpHome, "data", "work-visit");
@@ -103,6 +103,7 @@ test("loadData: 旧卡面装饰迁移时不误删头像框和称号", async () =
       { id: "avatar_star", type: "avatarFrame", name: "星光头像框", icon: "⭐", price: 500 },
       { id: "bg_warm", type: "cardBg", name: "暖白卡面", icon: "🌾", price: 500 },
       { id: "title", type: "title", name: "自定义称号", icon: "🏷️", price: 500 },
+      { id: "title_edit", type: "titleEdit", name: "改称号卡", icon: "✏️", price: 300 },
     ],
     partnerConfig: {
       hanako: {
@@ -117,13 +118,13 @@ test("loadData: 旧卡面装饰迁移时不误删头像框和称号", async () =
 
   const data = loadData();
   assert.deepEqual(data.partnerConfig.hanako.decorations, {
-    owned: { avatarFrame: ["avatar_star"], title: ["旧称号"] },
-    equipped: { avatarFrame: "avatar_star", title: "旧称号" },
+    owned: { avatarFrame: ["avatar_star"] },
+    equipped: { avatarFrame: "avatar_star" },
   });
-  assert.ok(!data.decorationItems.some((item) => item.type === "cardBg" || item.id === "bg_warm"));
+  assert.ok(!data.decorationItems.some((item) => item.type === "cardBg" || item.type === "title" || item.type === "titleEdit" || item.id === "bg_warm"));
   const persisted = JSON.parse(fs.readFileSync(dataFile, "utf-8"));
   assert.deepEqual(persisted.partnerConfig.hanako.decorations, data.partnerConfig.hanako.decorations);
-  assert.ok(!persisted.decorationItems.some((item) => item.type === "cardBg"));
+  assert.ok(!persisted.decorationItems.some((item) => item.type === "cardBg" || item.type === "title" || item.type === "titleEdit"));
 });
 
 // ════════════════════════════════════════════

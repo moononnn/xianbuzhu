@@ -29,14 +29,14 @@ test("mergeRefreshedPartners: 刷新找回所有伙伴（清除 hidden）", () =
   assert.equal(out.helperA.hidden, undefined, "刷新后 hidden 应被清除");
 });
 
-test("mergeRefreshedPartners: 保留旧配置的颜色/变量/装饰，并清掉卡面", () => {
+test("mergeRefreshedPartners: 保留旧配置的颜色/变量/装饰，并清掉卡面与称号", () => {
   const oldDeco = {
     owned: { avatarFrame: ["avatar_star"], cardBg: ["bg_warm"], title: ["旧称号"] },
     equipped: { avatarFrame: "avatar_star", cardBg: "bg_warm", title: "旧称号" },
   };
   const deco = {
-    owned: { avatarFrame: ["avatar_star"], title: ["旧称号"] },
-    equipped: { avatarFrame: "avatar_star", title: "旧称号" },
+    owned: { avatarFrame: ["avatar_star"] },
+    equipped: { avatarFrame: "avatar_star" },
   };
   const customStatuses = [{ id: "custom-hanako", text: "脑内施工中", icon: "🧠", category: "整活" }];
   const statusAutonomy = { lastCheckedAt: "2026-08-31T10:00:00+08:00", nextCheckAt: "2026-08-31T11:30:00+08:00" };

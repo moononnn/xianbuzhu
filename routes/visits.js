@@ -157,8 +157,8 @@ export function registerVisits(app, ctx) {
         // 高级状态按伙伴分别解锁，页面在装饰商店切换伙伴时直接读取这份目录。
         statusCollection: getPublicStatusCollection(data, id).filter((item) => item.unlockCost > 0),
         decorations: deco || {
-          owned: { avatarFrame: [], title: [] },
-          equipped: { avatarFrame: null, title: null },
+          owned: { avatarFrame: [] },
+          equipped: { avatarFrame: null },
         },
         recharged: isRechargedToday(data, id),
       });

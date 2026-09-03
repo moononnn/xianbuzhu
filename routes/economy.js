@@ -200,7 +200,7 @@ export function registerEconomy(app, ctx) {
     return withDataLock(async () => {
       const input = await readBody(c);
       const data = loadData();
-      const { decorationId, target, text } = input;
+      const { decorationId, target } = input;
 
       if (!decorationId || !target) {
         return json({ success: false, error: "缺少参数" }, 400);
@@ -227,32 +227,7 @@ export function registerEconomy(app, ctx) {
       const deco = normalizeDecorationState(partnerCfg.decorations);
       partnerCfg.decorations = deco;
 
-      if (item.type === "title") {
-        // 称号：需要输入文字
-        if (!text) return json({ success: false, error: "请输入称号文字" }, 400);
-        if (typeof text !== "string" || text.length > 12)
-          return json({ success: false, error: "称号文字限 12 字以内" }, 400);
-        // 检查是否已拥有
-        if (deco.owned.title.includes(text)) {
-          return json({ success: false, error: "已拥有该称号" }, 400);
-        }
-        deco.owned.title.push(text);
-        deco.equipped.title = text;
-      } else if (item.type === "titleEdit") {
-        // 改称号卡：必须先拥有至少一个称号
-        if (deco.owned.title.length === 0) {
-          return json({ success: false, error: "请先购买自定义称号" }, 400);
-        }
-        if (!text)
-          return json({ success: false, error: "请输入新的称号文字" }, 400);
-        if (typeof text !== "string" || text.length > 12)
-          return json({ success: false, error: "称号文字限 12 字以内" }, 400);
-        if (deco.owned.title.includes(text)) {
-          return json({ success: false, error: "已拥有该称号" }, 400);
-        }
-        deco.owned.title.push(text);
-        deco.equipped.title = text;
-      } else if (item.type === "avatarFrame") {
+      if (item.type === "avatarFrame") {
         // 头像框：检查是否已拥有
         const typeKey = "avatarFrame";
         if (deco.owned[typeKey].includes(item.id)) {
@@ -294,7 +269,7 @@ export function registerEconomy(app, ctx) {
 
       const partnerCfg = data.partnerConfig?.[target];
       if (!partnerCfg) return json({ success: false, error: "助手不存在" }, 400);
-      if (!["avatarFrame", "title"].includes(type)) {
+      if (!["avatarFrame"].includes(type)) {
         return json({ success: false, error: "这类装饰已经下架" }, 400);
       }
 
@@ -330,7 +305,7 @@ export function registerEconomy(app, ctx) {
 
       const partnerCfg = data.partnerConfig?.[target];
       if (!partnerCfg) return json({ success: false, error: "助手不存在" }, 400);
-      if (!["avatarFrame", "title"].includes(type)) {
+      if (!["avatarFrame"].includes(type)) {
         return json({ success: false, error: "这类装饰已经下架" }, 400);
       }
 

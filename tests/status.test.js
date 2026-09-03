@@ -155,15 +155,15 @@ test("状态收藏：自动临时状态不被付费锁拦住", () => {
   assert.equal(result.current.id, "brain-meeting");
 });
 
-test("卡面装饰迁移：保留头像框和称号，移除旧 cardBg 字段", () => {
+test("卡面/称号装饰迁移：保留头像框，移除旧 cardBg 与称号字段", () => {
   assert.deepEqual(
     normalizeDecorationState({
       owned: { avatarFrame: ["avatar_star"], cardBg: ["bg_warm"], title: ["旧称号"] },
       equipped: { avatarFrame: "avatar_star", cardBg: "bg_warm", title: "旧称号" },
     }),
     {
-      owned: { avatarFrame: ["avatar_star"], title: ["旧称号"] },
-      equipped: { avatarFrame: "avatar_star", title: "旧称号" },
+      owned: { avatarFrame: ["avatar_star"] },
+      equipped: { avatarFrame: "avatar_star" },
     },
   );
 });

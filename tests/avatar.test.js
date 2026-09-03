@@ -44,7 +44,7 @@ test("Yuan 类型映射到 Hana 内置头像文件", () => {
 
 test("从助手 config.yaml 读取 Yuan，未知值回到 hanako", () => {
   assert.equal(
-    parseAgentYuan("agent:\n  name: 星野\n  yuan: hanako\n"),
+    parseAgentYuan("agent:\n  name: 伙伴甲\n  yuan: hanako\n"),
     "hanako",
   );
   assert.equal(
