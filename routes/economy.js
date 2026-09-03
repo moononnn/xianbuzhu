@@ -9,6 +9,9 @@ import {
   saveData,
   getToday,
   nowISO,
+  getPublicStatusCollection,
+  unlockPublicStatus,
+  normalizeDecorationState,
   isRechargedToday,
   markRechargedToday,
   recordEvent,
@@ -31,6 +34,11 @@ import { encryptKey } from "../lib/providers.js";
 import { readBody, json } from "./_helpers.js";
 
 const HANA_HOME = process.env.HANA_HOME || path.join(os.homedir(), ".hanako");
+
+function cloneValue(value) {
+  if (value === undefined || value === null) return value;
+  return JSON.parse(JSON.stringify(value));
+}
 
 export function registerEconomy(app, ctx) {
   const bus = ctx.bus || ctx._bus;
@@ -148,6 +156,44 @@ export function registerEconomy(app, ctx) {
   });
 
   // ════════════════════════════════════════
+  //  POST /api/unlock-status — 为指定伙伴解锁高级状态
+  // ════════════════════════════════════════
+  app.post("/api/unlock-status", async (c) => {
+    return withDataLock(async () => {
+      const input = await readBody(c);
+      const data = loadData();
+      const partnerId = input.partnerId || input.partner || "";
+      const statusId = input.statusId || input.id || "";
+      if (!isValidAgentId(partnerId)) return json({ success: false, error: "无效的助手 ID" }, 400);
+      const partnerCfg = data.partnerConfig?.[partnerId];
+      if (!partnerCfg) return json({ success: false, error: "助手不存在" }, 404);
+      if (partnerCfg.hidden) return json({ success: false, error: "这位伙伴当前不在闲不住列表里" }, 400);
+
+      const beforeJar = data.jar;
+      const beforeStatusLibrary = cloneValue(data.statusLibrary);
+      const hadUnlocks = Object.prototype.hasOwnProperty.call(partnerCfg, "unlockedStatuses");
+      const beforeUnlocks = hadUnlocks ? cloneValue(partnerCfg.unlockedStatuses) : undefined;
+      const result = unlockPublicStatus(data, partnerId, statusId);
+      if (!result.ok) return json({ success: false, error: result.error }, 400);
+      if (!result.alreadyOwned && !saveData(data)) {
+        // saveData 使用原子替换；失败时把本次内存变更也撤回，保证调用方重试不会看到半提交状态。
+        data.jar = beforeJar;
+        data.statusLibrary = beforeStatusLibrary;
+        if (hadUnlocks) partnerCfg.unlockedStatuses = beforeUnlocks;
+        else delete partnerCfg.unlockedStatuses;
+        return json({ success: false, error: "状态收藏保存失败，请重试" }, 500);
+      }
+      return json({
+        success: true,
+        jar: data.jar,
+        status: result.status,
+        alreadyOwned: result.alreadyOwned,
+        statusCollection: getPublicStatusCollection(data, partnerId).filter((item) => item.unlockCost > 0),
+      });
+    });
+  });
+
+  // ════════════════════════════════════════
   //  POST /api/buy-decoration — 购买装饰
   // ════════════════════════════════════════
   app.post("/api/buy-decoration", async (c) => {
@@ -175,14 +221,11 @@ export function registerEconomy(app, ctx) {
       const partnerCfg = data.partnerConfig?.[target];
       if (!partnerCfg) return json({ success: false, error: "助手不存在" }, 400);
 
-      // 初始化新格式装饰数据
-      if (!partnerCfg.decorations || !partnerCfg.decorations.owned) {
-        partnerCfg.decorations = {
-          owned: { avatarFrame: [], cardBg: [], title: [] },
-          equipped: { avatarFrame: null, cardBg: null, title: null },
-        };
-      }
-      const deco = partnerCfg.decorations;
+      // 初始化并清理旧格式装饰数据；卡面已经移除，不再创建兼容字段。
+      const beforeJar = data.jar;
+      const beforeDecorations = cloneValue(partnerCfg.decorations);
+      const deco = normalizeDecorationState(partnerCfg.decorations);
+      partnerCfg.decorations = deco;
 
       if (item.type === "title") {
         // 称号：需要输入文字
@@ -209,19 +252,22 @@ export function registerEconomy(app, ctx) {
         }
         deco.owned.title.push(text);
         deco.equipped.title = text;
-      } else {
-        // 头像框/卡面：检查是否已拥有
-        const typeKey = item.type; // 'avatarFrame' or 'cardBg'
-        if (deco.owned[typeKey] && deco.owned[typeKey].includes(item.id)) {
+      } else if (item.type === "avatarFrame") {
+        // 头像框：检查是否已拥有
+        const typeKey = "avatarFrame";
+        if (deco.owned[typeKey].includes(item.id)) {
           return json({ success: false, error: "已拥有该装饰" }, 400);
         }
-        if (!deco.owned[typeKey]) deco.owned[typeKey] = [];
         deco.owned[typeKey].push(item.id);
         deco.equipped[typeKey] = item.id;
+      } else {
+        return json({ success: false, error: "这类装饰已经下架" }, 400);
       }
 
       data.jar -= item.price;
       if (!saveData(data)) {
+        data.jar = beforeJar;
+        partnerCfg.decorations = beforeDecorations;
         return json({ success: false, error: "数据保存失败，请重试" }, 500);
       }
 
@@ -248,9 +294,13 @@ export function registerEconomy(app, ctx) {
 
       const partnerCfg = data.partnerConfig?.[target];
       if (!partnerCfg) return json({ success: false, error: "助手不存在" }, 400);
+      if (!["avatarFrame", "title"].includes(type)) {
+        return json({ success: false, error: "这类装饰已经下架" }, 400);
+      }
 
-      const deco = partnerCfg.decorations;
-      if (!deco?.owned?.[type] || !deco.owned[type].includes(itemId)) {
+      const deco = normalizeDecorationState(partnerCfg.decorations);
+      partnerCfg.decorations = deco;
+      if (!deco.owned[type] || !deco.owned[type].includes(itemId)) {
         return json({ success: false, error: "未拥有该装饰" }, 400);
       }
 
@@ -280,9 +330,13 @@ export function registerEconomy(app, ctx) {
 
       const partnerCfg = data.partnerConfig?.[target];
       if (!partnerCfg) return json({ success: false, error: "助手不存在" }, 400);
+      if (!["avatarFrame", "title"].includes(type)) {
+        return json({ success: false, error: "这类装饰已经下架" }, 400);
+      }
 
-      const deco = partnerCfg.decorations;
-      if (deco?.equipped) {
+      const deco = normalizeDecorationState(partnerCfg.decorations);
+      partnerCfg.decorations = deco;
+      if (deco.equipped) {
         deco.equipped[type] = null;
         if (!saveData(data)) {
           return json({ success: false, error: "数据保存失败，请重试" }, 500);

@@ -45,11 +45,21 @@ class WorkVisitPlugin {
             info.temperamentAnalyzedAt = oldConfig[id].temperamentAnalyzedAt;
           if (oldConfig[id]?.heartRhythm)
             info.heartRhythm = oldConfig[id].heartRhythm;
+          if (oldConfig[id]?.statusAutonomy)
+            info.statusAutonomy = oldConfig[id].statusAutonomy;
+          if (Array.isArray(oldConfig[id]?.unlockedStatuses))
+            info.unlockedStatuses = oldConfig[id].unlockedStatuses;
+          if (Array.isArray(oldConfig[id]?.customStatuses))
+            info.customStatuses = oldConfig[id].customStatuses;
         }
-        data.partnerConfig = scanned;
-        saveData(data);
+        const configChanged = JSON.stringify(oldConfig) !== JSON.stringify(scanned);
+        if (configChanged) {
+          data.partnerConfig = scanned;
+          saveData(data);
+        }
         console.log(
-          "[闲不住] 已扫描 " + Object.keys(scanned).length + " 个伙伴",
+          "[闲不住] 已扫描 " + Object.keys(scanned).length + " 个伙伴"
+          + (configChanged ? "（配置已更新）" : "（配置未变化）"),
         );
       }
     } catch (e) {

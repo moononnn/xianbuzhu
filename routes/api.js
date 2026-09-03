@@ -1,7 +1,7 @@
 // routes/api.js — 路由聚合壳（原 1321 行的单文件已按域拆分）
 // 职责：页面渲染（/page、/assets/*）+ 聚合注册五个域路由
 //   visits.js    展板与互动域（/api/data、/api/visit、/api/update-narrative、/api/current-agent）
-//   economy.js   经济与装饰域（光粒/充电/装饰/排序/隐藏/刷新）
+//   economy.js   经济与装饰域（光粒/充电/状态收藏/装饰/排序/隐藏/刷新）
 //   llm.js       模型配置域（供应商/自定义/补 Key/测试）
 //   fengling.js  风铃悬浮球域（启动/停止/状态/自动启动）
 //   settings.js  设置与杂项域（卸载/检查更新/头像/小纸条）

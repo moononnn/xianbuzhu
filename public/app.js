@@ -11,6 +11,31 @@
     return div.innerHTML;
   }
 
+  // ─── 短状态标签：用稳定色调传达状态，具体活动仍由下方 doing 展示 ───
+  function statusToneClass(status) {
+    var tone = status && status.tone;
+    if (tone === 'focus' || tone === 'quiet' || tone === 'rose' || tone === 'mint') return tone;
+    var category = status && status.category;
+    if (category === '做事') return 'focus';
+    if (category === '心情') return 'quiet';
+    if (category === '整活') return 'rose';
+    return 'mint';
+  }
+
+  function statusBadgeHtml(status, extraClass) {
+    if (!status || !status.text) return '';
+    var title = status.source === 'autonomous'
+      ? '由伙伴自己决定的状态'
+      : '当前状态：' + String(status.text);
+    var icon = status && typeof status.icon === 'string' && status.icon ? String(status.icon) : '';
+    return '<span class="status-chip tone-' + statusToneClass(status) + (extraClass || '') + '" title="' + escapeHtml(title) + '">'
+      + (icon
+        ? '<span class="status-chip-icon" aria-hidden="true">' + escapeHtml(icon) + '</span>'
+        : '<span class="status-chip-dot" aria-hidden="true"></span>')
+      + '<span class="status-chip-text">' + escapeHtml(String(status.text)) + '</span>'
+      + '</span>';
+  }
+
   // ─── 头像框样式类映射（装饰 ID → CSS 类） ───
   function frameClassFor(equipped) {
     var map = {
@@ -49,7 +74,7 @@
 
   async function api(path, opts) {
     opts = opts || {};
-    var url = BASE + path + AUTH;
+    var url = BASE + path + (AUTH ? (path.indexOf('?') >= 0 ? '&' : '?') + AUTH.slice(1) : '');
     // 请求统一 30s 超时：后端万一卡住，前端自己放弃并报错，不再无限转圈
     var controller = new AbortController();
     var timer = setTimeout(function() { controller.abort(); }, 30000);
@@ -73,6 +98,7 @@
   var state = {
     jar: 0, newAvailable: 0, sectionTitle: '',
     partners: [], shopItems: [], interactItems: [], prankItems: [],
+    decorationItems: [], statusCollection: [], decorationCategory: 'avatarFrame',
     currentTab: 'interact',
     // v0.4 新增
     selectedPartnerId: null,    // 当前选中的伙伴
@@ -89,6 +115,7 @@
     heartSettings: { frequency: 'low' },
     temperamentOptions: [],
     temperamentDraft: null,
+    statusPanel: null,
   };
   var currentAction = null;
 
@@ -210,7 +237,12 @@
       var dragAttrs = canSortPartners
         ? ' draggable="true" ondragstart="window._tbDragStart(event)" ondragover="window._tbDragOver(event)" ondragenter="window._tbDragEnter(event)" ondragleave="window._tbDragLeave(event)" ondrop="window._tbDrop(event)" ondragend="window._tbDragEnd(event)"'
         : ' draggable="false"';
-      html += '<div class="partner-card' + selectedClass + '" role="option" tabindex="0" aria-selected="' + (isSelected ? 'true' : 'false') + '" aria-label="' + escapeHtml(p.name) + '，' + (p.active ? '在线' : '摸鱼') + '" data-partner-id="' + escapeHtml(p.id) + '" onclick="window._tbSelectPartner(\'' + pidSafe + '\')" onkeydown="window._tbPartnerKey(event,\'' + pidSafe + '\')"' + dragAttrs + '>';
+      // baseline 只是后台判断用的虚拟占位，不冒充伙伴真正挂上的状态。
+      var cardVisibleStatus = p.status && p.status.source !== 'baseline' ? p.status : null;
+      var cardStatusText = cardVisibleStatus && cardVisibleStatus.text ? String(cardVisibleStatus.text) : '';
+      var cardStatusLabel = cardStatusText;
+      var cardAria = escapeHtml(p.name) + '，' + (p.active ? '今天有活动' : '今天暂时安静') + (cardStatusLabel ? '，状态：' + escapeHtml(cardStatusLabel) : '');
+      html += '<div class="partner-card' + selectedClass + '" role="option" tabindex="0" aria-selected="' + (isSelected ? 'true' : 'false') + '" aria-label="' + cardAria + '" data-partner-id="' + escapeHtml(p.id) + '" onclick="window._tbSelectPartner(\'' + pidSafe + '\')" onkeydown="window._tbPartnerKey(event,\'' + pidSafe + '\')"' + dragAttrs + '>';
       if (p.avatarUrl) {
         html += '<div class="pc-avatar' + frameClass + '" data-initial="' + escapeHtml(initial) + '"><img src="' + BASE + p.avatarUrl + AUTH + '" alt="" onerror="this.style.display=\'none\';this.parentElement.classList.add(\'avatar-missing\');this.parentElement.insertBefore(document.createTextNode(this.parentElement.dataset.initial),this.parentElement.firstChild)">' + frameArtHtml(frameClass) + '</div>';
       } else {
@@ -218,14 +250,17 @@
       }
       html += '<div class="pc-info">';
       html += '<div class="pc-name">';
-      html += escapeHtml(p.name);
+      html += '<span class="pc-name-text">' + escapeHtml(p.name) + '</span>';
+      if (cardStatusText) {
+        html += statusBadgeHtml(cardVisibleStatus, ' pc-status-chip');
+      }
       if (equipped.title) {
         html += '<span class="title-badge">' + escapeHtml(equipped.title) + '</span>';
       }
       html += '</div>';
       html += '<div class="pc-meta">' + escapeHtml(p.doing || '—') + '</div>';
       html += '</div>';
-      html += '<span class="pc-status' + (p.active ? ' on' : '') + '" title="' + (p.active ? '在线' : '摸鱼') + '" aria-label="' + (p.active ? '在线' : '摸鱼') + '"></span>';
+      html += '<span class="pc-status' + (p.active ? ' on' : '') + '" title="' + (p.active ? '今天有活动' : '今天暂时安静') + '" aria-label="' + (p.active ? '今天有活动' : '今天暂时安静') + '"></span>';
       html += '</div>';
     }
     html += '</div></div>';
@@ -364,8 +399,14 @@
       html += '<div class="pp-header-avatar' + pFrameClass + '" style="background:' + p.color + '">' + initial + frameArtHtml(pFrameClass) + '</div>';
     }
     html += '<div class="pp-header-info">';
-    html += '<div class="pp-header-name">' + escapeHtml(p.name);
-    if (p.active) html += '<span class="pc-status on" style="margin-left:4px" aria-label="在线"></span>';
+    // baseline 只是后台判断用的虚拟占位，不在伙伴名字旁展示统一模板。
+    var panelVisibleStatus = p.status && p.status.source !== 'baseline' ? p.status : null;
+    var panelStatusText = panelVisibleStatus && panelVisibleStatus.text ? String(panelVisibleStatus.text) : '';
+    html += '<div class="pp-header-name"><span class="pp-name-text">' + escapeHtml(p.name) + '</span>';
+    if (panelStatusText) {
+      html += statusBadgeHtml(panelVisibleStatus, ' panel-status-chip');
+    }
+    if (p.active) html += '<span class="pc-status on" style="margin-left:4px" title="今天有活动" aria-label="今天有活动"></span>';
     html += '</div>';
     html += '<div class="pp-header-status">' + escapeHtml(p.doing || '—') + '</div>';
     html += '</div></div>';
@@ -379,6 +420,7 @@
     } else {
       html += '<button class="pp-header-btn" title="消耗 50 光粒充电" onclick="window._tbRecharge(\'' + pidSafe + '\')">充电</button>';
     }
+    html += '<button class="pp-header-btn" title="打开状态衣柜" onclick="window._tbOpenStatus()">状态</button>';
     html += '<button class="pp-header-btn" title="打开装饰" onclick="window._tbOpenDeco()">装饰</button>';
     html += '</div></div>';
 
@@ -837,10 +879,119 @@
     } catch (e) { toast('网络错误', 'error'); }
   };
 
-  // ─── 装饰商店：购买 + 衣橱切换二合一 ───
-  // 未拥有=✨价格购买；已拥有=点一下换上；正在用=高亮标记不可点
-  window._tbOpenDeco = function() {
-    if (!state.decorationItems || state.decorationItems.length === 0) { toast('暂无可用装饰', 'error'); return; }
+  // ─── 状态衣柜：公共池 + 伙伴专属状态 ───
+  window._tbOpenStatus = async function() {
+    var partnerId = state.selectedPartnerId;
+    if (!partnerId) { toast('先选一个助手', 'error'); return; }
+
+    var overlay = document.getElementById('status-overlay');
+    if (!overlay) {
+      var div = document.createElement('div');
+      div.className = 'modal-overlay';
+      div.id = 'status-overlay';
+      div.innerHTML = '<div class="modal status-modal" role="dialog" aria-modal="true" aria-labelledby="status-title">' +
+        '<div class="notes-modal-header"><h3 id="status-title">状态衣柜</h3><button class="modal-close" aria-label="关闭" onclick="window._tbCloseStatus()">×</button></div>' +
+        '<div class="status-body" id="status-body"><div class="llm-loading">加载中...</div></div>' +
+        '<div class="status-modal-footer"><span class="status-save-hint">状态由伙伴自己决定，想挂就挂，不想挂就留白。</span></div>' +
+        '</div>';
+      div.addEventListener('click', function(e) { if (e.target === div) window._tbCloseStatus(); });
+      document.body.appendChild(div);
+      overlay = div;
+    }
+
+    state.statusPanel = { partnerId: partnerId, current: null, publicStatuses: [], customStatuses: [] };
+    overlay.classList.add('show');
+    var body = document.getElementById('status-body');
+    if (body) body.innerHTML = '<div class="llm-loading">加载中...</div>';
+    try {
+      var data = await api('/api/statuses?partnerId=' + encodeURIComponent(partnerId));
+      if (!data.success) throw new Error(data.error || '状态衣柜暂时打不开');
+      data.partnerId = partnerId;
+      state.statusPanel = data;
+      var partner = findPartner(partnerId);
+      if (partner) partner.status = data.current || null;
+      window._tbRenderStatusPanel();
+    } catch (e) {
+      if (body) body.innerHTML = '<div class="status-empty">' + escapeHtml(e.message || '状态衣柜暂时打不开') + '</div>';
+      toast(e.message || '状态衣柜暂时打不开', 'error');
+    }
+  };
+
+  window._tbCloseStatus = function() {
+    var overlay = document.getElementById('status-overlay');
+    if (overlay) overlay.classList.remove('show');
+    state.statusPanel = null;
+  };
+
+  window._tbRenderStatusPanel = function() {
+    var body = document.getElementById('status-body');
+    var panel = state.statusPanel;
+    if (!body || !panel) return;
+    var baselineCurrent = panel.current && panel.current.source === 'baseline';
+    var current = panel.current && !baselineCurrent ? panel.current : null;
+    var currentPublic = current && (panel.publicStatuses || []).find(function(item) { return item.id === current.id; });
+    var currentLocked = currentPublic && currentPublic.unlocked === false;
+    var currentLabel = current
+      ? (current.text || '')
+      : (baselineCurrent ? '今天还没有新的状态决定' : '还没有挂状态');
+    var html = '';
+    html += '<div class="status-current-card' + (current ? ' has-status' : '') + '">';
+    html += '<div class="status-current-label">现在挂着</div>';
+    html += '<div class="status-current-value">' + (current ? statusBadgeHtml(current, ' status-chip-large') : escapeHtml(currentLabel || '还没有挂状态')) + '</div>';
+    if (current) {
+      var expiryText = current.duration === 'hour' ? '保持 1 小时' : current.duration === 'four_hours' ? '保持 4 小时' : current.duration === 'until_changed' ? '会一直保持，直到伙伴自己换掉它' : '保持到今天结束';
+      html += '<div class="status-current-expiry">' + expiryText + '</div>';
+      if (current.source === 'autonomous') {
+        html += '<div class="status-current-source">' + (currentLocked ? '由伙伴自己决定的临时状态，未占用这位伙伴的解锁额度' : '由伙伴自己决定，合适时会继续保持或换掉') + '</div>';
+      }
+    }
+    html += '</div>';
+    html += '<div class="status-autonomy-note">保持多久也由伙伴自己决定。</div>';
+
+    html += '<div class="status-section"><div class="status-section-title">公共状态 · 它可以自己从这里选择</div><div class="status-grid">';
+    var publicStatuses = panel.publicStatuses || [];
+    for (var i = 0; i < publicStatuses.length; i++) {
+      var pub = publicStatuses[i];
+      var pubActive = current && current.id === pub.id;
+      var pubLocked = pub.unlocked === false;
+      var pubAction = pubLocked
+        ? "window._tbCloseStatus();window._tbOpenDeco('status')"
+        : "";
+      html += '<button' + (pubLocked ? '' : ' disabled') + ' class="status-choice' + (pubActive ? ' active' : '') + (pubLocked ? ' locked' : ' status-choice-readonly') + '"' + (pubLocked ? ' title="去装饰商店解锁"' : ' title="由伙伴自己决定是否挂上"') + ' onclick="' + pubAction + '">';
+      html += '<span class="status-choice-icon">' + escapeHtml(pub.icon || '✨') + '</span><span class="status-choice-copy"><b>' + escapeHtml(pub.text) + '</b><small>' + (pubLocked ? '🔒 装饰商店 · ✨ ' + (pub.unlockCost || 800) : escapeHtml(pub.category || '')) + '</small></span>';
+      html += '</button>';
+    }
+    html += '</div></div>';
+
+    html += '<div class="status-section"><div class="status-section-title">' + escapeHtml((panel.partner && panel.partner.name) || '这位伙伴') + '的专属状态</div>';
+    var customStatuses = panel.customStatuses || [];
+    if (customStatuses.length === 0) {
+      html += '<div class="status-empty status-rack-empty">它还没有为自己留下专属状态。</div>';
+    } else {
+      html += '<div class="status-grid">';
+      for (var j = 0; j < customStatuses.length; j++) {
+        var custom = customStatuses[j];
+        var customActive = current && current.id === custom.id;
+        html += '<button disabled class="status-choice status-choice-readonly status-custom' + (customActive ? ' active' : '') + '" title="由伙伴自己决定是否挂上">';
+        html += '<span class="status-choice-icon">' + escapeHtml(custom.icon || '✨') + '</span><span class="status-choice-copy"><b>' + escapeHtml(custom.text) + '</b><small>' + escapeHtml(custom.category || '自定义') + '</small></span>';
+        html += '</button>';
+      }
+      html += '</div>';
+    }
+    html += '</div>';
+
+    html += '<div class="status-autonomy-note">专属状态也由伙伴自己决定，不在这里手动添加。</div>';
+    body.innerHTML = html;
+  };
+
+  // ─── 装饰商店：分类浏览 ───
+  // 头像框、称号和高级状态收藏都按伙伴分别拥有。
+  window._tbOpenDeco = function(category) {
+    // 即使某一类暂时为空也照常打开，分类页自己展示空状态；不能让一份空集合封死整个商店。
+    var categories = ['avatarFrame', 'status', 'title'];
+    if (categories.indexOf(category) >= 0) state.decorationCategory = category;
+    if (categories.indexOf(state.decorationCategory) < 0) state.decorationCategory = 'avatarFrame';
+    var currentCategory = state.decorationCategory;
     if (!state.selectedPartnerId) { toast('先选一个助手', 'error'); return; }
 
     var overlay = $('#modal-overlay');
@@ -848,9 +999,11 @@
     var targetSection = $('#modal-target-section');
     var target = $('#modal-target');
     var confirm = $('#modal-confirm');
+    var targetLabel = targetSection ? targetSection.querySelector('label') : null;
 
-    title.textContent = '装饰商店 · 给谁装扮';
-    if (targetSection) targetSection.style.display = '';
+    title.textContent = '装饰商店';
+    if (targetSection) targetSection.style.display = currentCategory === 'status' ? 'none' : '';
+    if (targetLabel) targetLabel.textContent = currentCategory === 'status' ? '当前伙伴' : '给谁装扮？';
     if (confirm) confirm.style.display = 'none';
 
     if (target) {
@@ -873,6 +1026,7 @@
     var oldList = document.getElementById('modal-deco-list');
     if (oldList) oldList.remove();
 
+    var category = state.decorationCategory;
     var target = $('#modal-target');
     var tid = target ? target.value : state.selectedPartnerId;
     var partner = null;
@@ -882,34 +1036,93 @@
     var pDeco = (partner && partner.decorations) || {};
     var pOwned = pDeco.owned || {};
     var pEquipped = pDeco.equipped || {};
+    var categoryItems = category === 'status'
+      ? ((partner && partner.statusCollection) || state.statusCollection || [])
+      : (state.decorationItems || []).filter(function(item) {
+        return category === 'title'
+          ? item.type === 'title' || item.type === 'titleEdit'
+          : item.type === 'avatarFrame';
+      });
 
     var list = document.createElement('div');
     list.id = 'modal-deco-list';
-    list.style.cssText = 'display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px';
+    list.className = 'deco-shop-list';
 
-    for (var j = 0; j < state.decorationItems.length; j++) {
-      var di = state.decorationItems[j];
-      var typeKey = di.type; // 'avatarFrame' / 'cardBg'
+    var nav = document.createElement('div');
+    nav.className = 'deco-category-nav';
+    nav.setAttribute('role', 'tablist');
+    var categoryNames = { avatarFrame: '头像框', status: '状态收藏', title: '称号' };
+    for (var n = 0; n < 3; n++) {
+      var categoryId = ['avatarFrame', 'status', 'title'][n];
+      var categoryButton = document.createElement('button');
+      categoryButton.type = 'button';
+      categoryButton.className = 'deco-category-btn' + (category === categoryId ? ' active' : '');
+      categoryButton.textContent = categoryNames[categoryId];
+      categoryButton.setAttribute('role', 'tab');
+      categoryButton.setAttribute('aria-selected', category === categoryId ? 'true' : 'false');
+      categoryButton.onclick = (function(nextCategory) {
+        return function() {
+          state.decorationCategory = nextCategory;
+          window._tbOpenDeco(nextCategory);
+        };
+      })(categoryId);
+      nav.appendChild(categoryButton);
+    }
+    list.appendChild(nav);
+    if (category === 'status') {
+      var statusHint = document.createElement('div');
+      statusHint.className = 'deco-shop-hint';
+      statusHint.textContent = '给当前伙伴解锁后，伙伴可以自行选择；其他伙伴需要分别购买。';
+      list.appendChild(statusHint);
+    }
+
+    var grid = document.createElement('div');
+    grid.className = 'deco-item-grid';
+    for (var j = 0; j < categoryItems.length; j++) {
+      var di = categoryItems[j];
+      var isStatus = category === 'status';
+      var typeKey = di.type;
       var ownedList = pOwned[typeKey] || [];
-      var isOwned = ownedList.indexOf(di.id) >= 0;
-      var isEquipped = pEquipped[typeKey] === di.id;
-      var canBuy = state.jar >= di.price;
+      var isOwned = !isStatus && typeKey === 'avatarFrame' && ownedList.indexOf(di.id) >= 0;
+      var isEquipped = !isStatus && pEquipped[typeKey] === di.id;
+      var titleReady = typeKey !== 'titleEdit' || (pOwned.title || []).length > 0;
+      var canBuy = isStatus
+        ? false
+        : state.jar >= (Number(di.price) || 0) && titleReady;
+      var statusUnlocked = isStatus && di.unlocked !== false;
 
       var btn = document.createElement('div');
-      btn.className = 'deco-item' + (di.type === 'avatarFrame' ? ' avatar-deco' : '')
-        + (isEquipped ? ' using' : (isOwned ? ' owned' : (canBuy ? '' : ' locked')));
+      btn.className = 'deco-item'
+        + (typeKey === 'avatarFrame' ? ' avatar-deco' : '')
+        + (isStatus ? ' deco-status' : '')
+        + (isEquipped ? ' using' : (isOwned || statusUnlocked ? ' owned' : ''))
+        + ((!isStatus && !isEquipped && !isOwned && !canBuy) || (isStatus && !statusUnlocked) ? ' locked' : '');
 
-      var preview = di.type === 'avatarFrame'
+      var preview = typeKey === 'avatarFrame'
         ? '<div class="deco-avatar-preview' + frameClassFor({ avatarFrame: di.id }) + '" aria-hidden="true">' + frameArtHtml(frameClassFor({ avatarFrame: di.id })) + '</div>'
-        : '<div class="deco-icon">' + di.icon + '</div>';
-
-      var priceText = isEquipped ? '使用中' : (isOwned ? '换上' : '✨ ' + di.price);
-      btn.innerHTML = preview + '<div class="deco-name">' + escapeHtml(di.name) + '</div><div class="deco-price">' + priceText + '</div>';
-
-      if (isEquipped) {
-        // 使用中：高亮标记，不可点击
+        : '<div class="deco-icon">' + escapeHtml(di.icon || '✨') + '</div>';
+      var priceText;
+      if (isStatus) {
+        priceText = statusUnlocked ? '已收藏 · 等伙伴自己选择' : '✨ ' + (di.unlockCost || 800) + ' · 解锁';
+      } else if (isEquipped) {
+        priceText = '使用中';
       } else if (isOwned) {
-        // 已拥有：点击直接切换装备，不再花钱
+        priceText = '换上';
+      } else if (!titleReady) {
+        priceText = '先拥有一个称号';
+      } else {
+        priceText = '✨ ' + di.price;
+      }
+      btn.innerHTML = preview + '<div class="deco-name">' + escapeHtml(di.name || di.text || '') + '</div><div class="deco-price">' + escapeHtml(priceText) + '</div>';
+
+      if (isStatus && !statusUnlocked) {
+        btn.style.cursor = 'pointer';
+        btn.onclick = (function(statusId, targetPartnerId) {
+          return function() { window._tbUnlockStatus(statusId, targetPartnerId); };
+        })(di.id, tid);
+      } else if (isEquipped) {
+        // 使用中：高亮标记，不可点击。
+      } else if (isOwned) {
         btn.style.cursor = 'pointer';
         btn.onclick = (function(id, t, tk) {
           return async function() {
@@ -942,8 +1155,15 @@
           };
         })(di);
       }
-      list.appendChild(btn);
+      grid.appendChild(btn);
     }
+    if (categoryItems.length === 0) {
+      var empty = document.createElement('div');
+      empty.className = 'deco-shop-empty';
+      empty.textContent = category === 'status' ? '暂时没有可收藏的状态。' : '这一类暂时没有可用内容。';
+      grid.appendChild(empty);
+    }
+    list.appendChild(grid);
 
     var titleSection = document.getElementById('modal-title-section');
     var overlay = $('#modal-overlay');
@@ -1134,9 +1354,21 @@
     var titleSection = $('#modal-title-section');
     if (titleSection) titleSection.style.display = 'none';
     var confirm = $('#modal-confirm');
-    if (confirm) { confirm.style.display = ''; confirm.onclick = window._tbConfirm; }
+    if (confirm) {
+      confirm.style.display = '';
+      confirm.disabled = false;
+      confirm.textContent = '确认';
+      confirm.className = 'modal-btn confirm';
+      confirm.onclick = window._tbConfirm;
+    }
     var ts = $('#modal-target-section');
-    if (ts) ts.style.display = '';
+    if (ts) {
+      ts.style.display = '';
+      var targetLabel = ts.querySelector('label');
+      if (targetLabel) targetLabel.textContent = '送给谁？';
+    }
+    var unlockNote = document.getElementById('modal-deco-confirm-note');
+    if (unlockNote) unlockNote.remove();
     currentAction = null;
     // 清理动态列表
     var lists = ['modal-interact-list', 'modal-gift-list', 'modal-deco-list'];
@@ -1174,6 +1406,71 @@
     }
   };
 
+  // ─── 解锁状态收藏（按伙伴分别消费）───
+  window._tbUnlockStatus = function(statusId, partnerId) {
+    var target = document.getElementById('modal-target');
+    var targetPartnerId = partnerId || (target && target.value) || state.selectedPartnerId;
+    var partner = findPartner(targetPartnerId);
+    var collection = partner && Array.isArray(partner.statusCollection)
+      ? partner.statusCollection
+      : (state.statusCollection || []);
+    var status = null;
+    for (var i = 0; i < collection.length; i++) {
+      if (collection[i].id === statusId) { status = collection[i]; break; }
+    }
+    if (!targetPartnerId || !status || status.unlocked !== false) return;
+
+    var overlay = document.getElementById('modal-overlay');
+    var modal = overlay ? overlay.querySelector('.modal') : null;
+    var title = document.getElementById('modal-title');
+    var targetSection = document.getElementById('modal-target-section');
+    var titleSection = document.getElementById('modal-title-section');
+    var confirm = document.getElementById('modal-confirm');
+    if (!overlay || !modal || !confirm) return;
+    var oldList = document.getElementById('modal-deco-list');
+    if (oldList) oldList.remove();
+    if (targetSection) targetSection.style.display = 'none';
+    if (titleSection) titleSection.style.display = 'none';
+    if (title) title.textContent = (status.icon || '✨') + ' 为 ' + ((partner && partner.name) || '这位伙伴') + ' 解锁';
+
+    var note = document.getElementById('modal-deco-confirm-note');
+    if (!note) {
+      note = document.createElement('div');
+      note.id = 'modal-deco-confirm-note';
+      var actions = modal.querySelector('.modal-actions');
+      if (actions) modal.insertBefore(note, actions);
+      else modal.appendChild(note);
+    }
+    note.innerHTML = '<div class="deco-unlock-icon">' + escapeHtml(status.icon || '✨') + '</div>'
+      + '<div class="deco-unlock-name">' + escapeHtml(status.text || '') + '</div>'
+      + '<div class="deco-unlock-copy">给这位伙伴解锁后，伙伴可以自行选择；其他伙伴需要分别购买。</div>'
+      + '<div class="deco-unlock-cost">✨ ' + (status.unlockCost || 800) + ' 光粒</div>';
+    confirm.style.display = '';
+    confirm.textContent = '确认解锁';
+    confirm.className = 'modal-btn confirm';
+    confirm.onclick = async function() {
+      confirm.disabled = true;
+      try {
+        var data = await api('/api/unlock-status', {
+          method: 'POST',
+          body: JSON.stringify({ statusId: statusId, partnerId: targetPartnerId }),
+        });
+        if (!data.success) throw new Error(data.error || '解锁失败');
+        state.jar = data.jar;
+        if (Array.isArray(data.statusCollection) && partner) partner.statusCollection = data.statusCollection;
+        toast('已为 ' + ((partner && partner.name) || '这位伙伴') + ' 解锁：' + (status.icon || '✨') + ' ' + (status.text || ''));
+        window._tbClose();
+        state.decorationCategory = 'status';
+        render();
+        window._tbOpenDeco('status');
+      } catch (e) {
+        toast(e.message || '解锁失败，请再试一次', 'error');
+        confirm.disabled = false;
+      }
+    };
+    overlay.classList.add('show');
+  };
+
   // ─── 购买装饰（弹窗里用）──
   window._tbBuyDeco = async function(decorationId, name, icon, type, price) {
     var overlay = document.getElementById('modal-overlay');
@@ -1203,26 +1500,33 @@
         var ttext = titleInput.value.trim();
         if (!tid) { toast('请选择助手', 'error'); return; }
         if (!ttext) { toast('请输入称号文字', 'error'); return; }
-        var data = await api('/api/buy-decoration', {
-          method: 'POST',
-          body: JSON.stringify({ decorationId: decorationId, target: tid, text: ttext }),
-        });
-        if (data.success) {
-          state.jar = data.jar;
-          if (data.decorations) {
-            for (var i = 0; i < state.partners.length; i++) {
-              if (state.partners[i].id === tid) {
-                state.partners[i].decorations = data.decorations;
-                break;
+        confirm.disabled = true;
+        try {
+          var data = await api('/api/buy-decoration', {
+            method: 'POST',
+            body: JSON.stringify({ decorationId: decorationId, target: tid, text: ttext }),
+          });
+          if (data.success) {
+            state.jar = data.jar;
+            if (data.decorations) {
+              for (var i = 0; i < state.partners.length; i++) {
+                if (state.partners[i].id === tid) {
+                  state.partners[i].decorations = data.decorations;
+                  break;
+                }
               }
             }
+            toast(icon + ' ' + name + ' 购买成功！');
+            titleSection.style.display = 'none';
+            window._tbClose();
+            render();
+          } else {
+            toast(data.error || '购买失败', 'error');
+            confirm.disabled = false;
           }
-          toast(icon + ' ' + name + ' 购买成功！');
-          titleSection.style.display = 'none';
-          window._tbClose();
-          render();
-        } else {
-          toast(data.error || '购买失败', 'error');
+        } catch (e) {
+          confirm.disabled = false;
+          toast(e.message || '购买失败，请再试一次', 'error');
         }
       };
     } else {
@@ -1232,22 +1536,29 @@
       confirm.onclick = async function() {
         var tid = target.value;
         if (!tid) { toast('请选择助手', 'error'); return; }
-        var data = await api('/api/buy-decoration', {
-          method: 'POST',
-          body: JSON.stringify({ decorationId: decorationId, target: tid }),
-        });
-        if (data.success) {
-          state.jar = data.jar;
-          var partner = null;
-          for (var i = 0; i < state.partners.length; i++) {
-            if (state.partners[i].id === tid) { partner = state.partners[i]; break; }
+        confirm.disabled = true;
+        try {
+          var data = await api('/api/buy-decoration', {
+            method: 'POST',
+            body: JSON.stringify({ decorationId: decorationId, target: tid }),
+          });
+          if (data.success) {
+            state.jar = data.jar;
+            var partner = null;
+            for (var i = 0; i < state.partners.length; i++) {
+              if (state.partners[i].id === tid) { partner = state.partners[i]; break; }
+            }
+            if (data.decorations && partner) partner.decorations = data.decorations;
+            toast(icon + ' ' + name + ' 购买成功！');
+            window._tbClose();
+            render();
+          } else {
+            toast(data.error || '购买失败', 'error');
+            confirm.disabled = false;
           }
-          if (data.decorations && partner) partner.decorations = data.decorations;
-          toast(icon + ' ' + name + ' 购买成功！');
-          window._tbClose();
-          render();
-        } else {
-          toast(data.error || '购买失败', 'error');
+        } catch (e) {
+          confirm.disabled = false;
+          toast(e.message || '购买失败，请再试一次', 'error');
         }
       };
     }
@@ -1771,6 +2082,7 @@
       state.interactItems = data.interactItems || [];
       state.prankItems = data.prankItems || [];
       state.decorationItems = data.decorationItems || [];
+      state.statusCollection = data.statusCollection || [];
       state.tip = data.tip || '';
       state.hasNotes = data.hasNotes || false;
       state.hasNewNotes = data.hasNewNotes || false;
@@ -1831,7 +2143,32 @@
     }
   }
 
-  // ─── v0.4：定时轮询当前 agent / 心意 / 风铃（5 秒一次）──
+  // 状态自检在后台完成，页面只需把新状态轻量同步到现有伙伴卡，不重置用户当前选择。
+  function partnerStatusFingerprint(partner) {
+    var status = partner && partner.status;
+    var statusPart = status
+      ? [status.id || '', status.text || '', status.icon || '', status.setAt || '', status.expiresAt || ''].join('\\u0001')
+      : '';
+    var unlockPart = (partner && Array.isArray(partner.statusCollection) ? partner.statusCollection : [])
+      .map(function(item) { return (item.id || '') + ':' + (item.unlocked === false ? '0' : '1'); })
+      .join('\\u0002');
+    return statusPart + '\\u0003' + unlockPart;
+  }
+
+  function partnerStatusesChanged(nextPartners) {
+    if (!Array.isArray(nextPartners) || !Array.isArray(state.partners)) return Array.isArray(nextPartners);
+    if (nextPartners.length !== state.partners.length) return true;
+    var oldById = {};
+    for (var i = 0; i < state.partners.length; i++) oldById[state.partners[i].id] = state.partners[i];
+    for (var j = 0; j < nextPartners.length; j++) {
+      var next = nextPartners[j];
+      var old = oldById[next.id];
+      if (!old || partnerStatusFingerprint(old) !== partnerStatusFingerprint(next)) return true;
+    }
+    return false;
+  }
+
+  // ─── v0.4：定时轮询当前 agent / 心意 / 状态 / 风铃（5 秒一次）──
   setInterval(async function() {
     // 心意到达后，页面本身也能看到轻提示；风铃只是信使，不承担回复。
     try {
@@ -1845,7 +2182,9 @@
       state.heartInbox = heartState.heartInbox || state.heartInbox;
       state.heartOmittedCount = heartState.heartOmittedCount || 0;
       state.heartSettings = heartState.heartSettings || state.heartSettings;
-      if (heartChanged) render();
+      var partnerChanged = partnerStatusesChanged(heartState.partners);
+      if (partnerChanged) state.partners = heartState.partners;
+      if (heartChanged || partnerChanged) render();
     } catch {}
 
     try {

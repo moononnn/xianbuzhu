@@ -14,6 +14,7 @@ import {
   getPartnerConfig,
   getVisiblePartnerConfig,
 } from "../lib/config.js";
+import { resolveAgentAvatar } from "../lib/avatar.js";
 import {
   analyzePartnerTemperament,
   getHeartSummary,
@@ -187,23 +188,22 @@ export function registerSettings(app, ctx) {
     if (!/^[a-zA-Z0-9_-]+$/.test(agentId)) {
       return new Response(null, { status: 404 });
     }
-    const avatarPath = path.join(
-      HANA_HOME,
-      "agents",
-      agentId,
-      "avatars",
-      "agent.png",
-    );
+
+    const avatar = resolveAgentAvatar(HANA_HOME, agentId, {
+      // 当前 Hana 服务端工作目录就是产品目录；若宿主提供 productDir，也优先尝试它。
+      productDirs: [ctx?.productDir],
+    });
+    if (!avatar) return new Response(null, { status: 404 });
+
     try {
-      if (fs.existsSync(avatarPath)) {
-        const img = fs.readFileSync(avatarPath);
-        return new Response(img, {
-          headers: {
-            "Content-Type": "image/png",
-            "Cache-Control": "public, max-age=86400",
-          },
-        });
-      }
+      const img = fs.readFileSync(avatar.path);
+      return new Response(img, {
+        headers: {
+          "Content-Type": avatar.mimeType,
+          // Yuan 可切换，不能把旧默认头像缓存一整天。
+          "Cache-Control": "no-cache",
+        },
+      });
     } catch {}
     return new Response(null, { status: 404 });
   });

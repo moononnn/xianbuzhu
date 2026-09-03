@@ -2,12 +2,12 @@
 // 轻量工具：让助手感受自己当下的好感和心情状态
 // 在新对话开始时调用，助手能够自然内化当前的情绪基调
 
-import { loadData, getAffectionStage } from "../lib/data.js";
+import { loadData, getAffectionStage, getCurrentStatus } from "../lib/data.js";
 import { getUserDisplayName } from "../lib/activity.js";
 
 export const name = "sense-state";
 export const description =
-  "感受自己当下的心情和身体状态。当你觉得这是一个全新开始的对话窗口、想找到今天说话的基调时，可以调用这个工具来了解自己当前的状态是轻盈还是沉静的。它会返回自然的状态描述。";
+  "感受自己当下的心情和身体状态。当你觉得这是一个全新开始的对话窗口、想找到今天说话的基调时，可以调用这个工具来了解自己当前的状态是轻盈还是沉静的，也会告诉你当前挂着的伙伴状态。它会返回自然的状态描述。";
 
 export const parameters = {
   type: "object",
@@ -33,6 +33,7 @@ export async function execute(args, ctx = {}) {
       };
     }
 
+    const currentStatus = getCurrentStatus(data, currentAgent);
     const partnerCfg = data.partnerConfig?.[currentAgent];
     if (!partnerCfg?.variables) {
       return {
@@ -41,6 +42,7 @@ export async function execute(args, ctx = {}) {
             type: "text",
             text: JSON.stringify({
               state: "今天没什么特别的感觉，和平时一样平静。",
+              currentStatus,
             }),
           },
         ],
@@ -107,6 +109,7 @@ export async function execute(args, ctx = {}) {
             // 零数字：不给原始数值（mood/affection/energy），只给关系阶段 + 自然语言状态
             stage: `${stage.emoji} ${stage.label}`,
             state: stateDesc,
+            currentStatus,
           }),
         },
       ],

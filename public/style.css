@@ -649,14 +649,99 @@ button:disabled,
 .pc-name {
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 3px;
   min-width: 0;
   overflow: hidden;
   color: var(--ink);
   font-family: var(--font-display);
   font-size: var(--text-sm);
+  white-space: nowrap;
+}
+
+.pc-name-text,
+.pp-name-text {
+  min-width: 0;
+  flex: 0 1 auto;
+  overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* 短状态是名字旁的即时信号；具体活动继续由下面的 pc-meta / pp-header-status 承担。 */
+.status-chip {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  max-width: 14ch;
+  gap: 4px;
+  flex: 0 1 auto;
+  padding: 2px 7px;
+  overflow: hidden;
+  border: 1px solid var(--status-line);
+  border-radius: 999px;
+  background: var(--status-bg);
+  color: var(--status-ink);
+  font-family: var(--font-body);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.35;
+  vertical-align: middle;
+}
+
+.status-chip-dot {
+  width: 6px;
+  height: 6px;
+  flex: 0 0 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.status-chip-icon {
+  flex: 0 0 auto;
+  font-size: 12px;
+  line-height: 1;
+}
+
+.status-chip-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.status-chip.tone-mint {
+  --status-bg: var(--mint-soft);
+  --status-line: color-mix(in srgb, var(--mint-deep) 34%, var(--line));
+  --status-ink: var(--mint-strong);
+}
+
+.status-chip.tone-focus {
+  --status-bg: var(--warning-soft);
+  --status-line: color-mix(in srgb, var(--warning) 38%, var(--line));
+  --status-ink: var(--warning);
+}
+
+.status-chip.tone-quiet {
+  --status-bg: #f1ede6;
+  --status-line: #d8cbbc;
+  --status-ink: #7c6b5d;
+}
+
+.status-chip.tone-rose {
+  --status-bg: var(--rose-soft);
+  --status-line: color-mix(in srgb, var(--rose-deep) 36%, var(--line));
+  --status-ink: var(--rose-deep);
+}
+
+.status-chip-large {
+  max-width: 100%;
+  padding: 4px 10px;
+  font-size: var(--text-sm);
+}
+
+.pc-status-chip,
+.panel-status-chip {
+  flex: 0 0 auto;
 }
 
 .pc-meta {
@@ -1044,15 +1129,18 @@ button:disabled,
 .pp-header-name {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: 4px;
   min-width: 0;
   margin-bottom: 3px;
   overflow: hidden;
   color: var(--ink);
   font-family: var(--font-display);
   font-size: var(--text-md);
-  text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.panel-status-chip {
+  max-width: 18ch;
 }
 
 .pp-header-status {
@@ -1475,9 +1563,109 @@ button:disabled,
 
 #modal-deco-list {
   max-height: min(46dvh, 360px);
+  margin-bottom: 14px;
   padding-right: 4px;
   overflow-y: auto;
   overscroll-behavior: contain;
+}
+
+.deco-category-nav {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.deco-category-btn {
+  min-width: 0;
+  min-height: 34px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--sheet-deep);
+  color: var(--muted);
+  font-size: var(--text-xs);
+  cursor: pointer;
+  transition: border-color var(--dur-fast) ease, background-color var(--dur-fast) ease, color var(--dur-fast) ease;
+}
+
+.deco-category-btn:hover {
+  border-color: color-mix(in srgb, var(--mint-deep) 42%, var(--line));
+  background: var(--mint-faint);
+  color: var(--mint-deep);
+}
+
+.deco-category-btn.active {
+  border-color: var(--mint-deep);
+  background: var(--mint-soft);
+  color: var(--mint-deep);
+  font-weight: 600;
+}
+
+.deco-item-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.deco-shop-hint {
+  margin: 0 2px 10px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+  text-align: center;
+}
+
+.deco-status .deco-price {
+  min-height: 30px;
+  line-height: 1.4;
+  white-space: normal;
+}
+
+.deco-shop-empty {
+  grid-column: 1 / -1;
+  padding: 28px 10px;
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  color: var(--muted);
+  text-align: center;
+  font-size: var(--text-xs);
+}
+
+.deco-unlock-note,
+#modal-deco-confirm-note {
+  margin-bottom: 16px;
+  padding: 18px 14px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--mint-faint);
+  text-align: center;
+}
+
+.deco-unlock-icon {
+  margin-bottom: 4px;
+  font-size: 28px;
+}
+
+.deco-unlock-name {
+  color: var(--ink);
+  font-family: var(--font-display);
+  font-size: var(--text-md);
+}
+
+.deco-unlock-copy {
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  line-height: 1.6;
+}
+
+.deco-unlock-cost {
+  margin-top: 10px;
+  color: var(--mint-deep);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
 }
 
 .modal.notes-modal {
@@ -1797,7 +1985,8 @@ button:disabled,
 
   .pp-action:hover,
   .pp-inline-item:hover,
-  .notes-group-header:hover {
+  .notes-group-header:hover,
+  .status-choice:hover {
     background: var(--mint-faint);
   }
 
@@ -2321,6 +2510,153 @@ button:disabled,
   }
 }
 
+/* ── 状态衣柜弹窗 ── */
+.status-modal {
+  width: min(100%, 560px);
+  max-height: 86dvh;
+  padding: 0;
+}
+.status-body {
+  min-height: 0;
+  padding: 14px 18px 18px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.status-modal-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 10px;
+  flex: 0 0 auto;
+  padding: 12px 18px 16px;
+  border-top: 1px solid var(--line);
+}
+.status-save-hint {
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+.status-current-card {
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  background: var(--mint-faint);
+}
+.status-current-card.has-status {
+  border-color: color-mix(in srgb, var(--mint-deep) 38%, var(--line));
+  background: var(--mint-soft);
+}
+.status-current-label,
+.status-section-title {
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+.status-current-value {
+  display: flex;
+  align-items: center;
+  min-height: 26px;
+  margin-top: 4px;
+  overflow: hidden;
+  color: var(--ink);
+  font-family: var(--font-display);
+  font-size: var(--text-base);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.status-current-expiry,
+.status-current-source {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.status-autonomy-note {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: var(--mint-faint);
+  color: var(--muted);
+  font-size: var(--text-xs);
+  line-height: 1.6;
+}
+.status-section {
+  margin-top: 18px;
+}
+.status-section-title {
+  margin-bottom: 8px;
+}
+.status-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+.status-choice {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+  min-height: 54px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--sheet);
+  color: var(--ink);
+  text-align: left;
+}
+.status-choice.active {
+  border-color: var(--mint-deep);
+  background: var(--mint-soft);
+  box-shadow: inset 0 0 0 1px var(--mint-deep);
+}
+
+.status-choice.locked {
+  border-color: color-mix(in srgb, var(--line) 86%, var(--muted));
+  background: var(--sheet-deep);
+  color: var(--muted);
+  opacity: .74;
+}
+
+.status-choice.locked:hover {
+  border-color: color-mix(in srgb, var(--mint-deep) 35%, var(--line));
+  background: var(--mint-faint);
+}
+.status-choice-readonly[disabled] {
+  cursor: default;
+  opacity: 1;
+}
+.status-choice-icon {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  flex: 0 0 28px;
+  font-size: 18px;
+}
+.status-choice-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+.status-choice-copy b {
+  overflow: hidden;
+  font-size: var(--text-sm);
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.status-choice-copy small {
+  color: var(--muted);
+  font-size: 11px;
+}
+.status-empty {
+  padding: 13px 10px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: var(--mint-faint);
+  color: var(--muted);
+  font-size: var(--text-xs);
+  text-align: center;
+}
+
 /* ── 编辑伙伴列表弹窗 ── */
 .edit-partners-modal {
   width: min(360px, 92vw);
@@ -2619,5 +2955,8 @@ button:disabled,
 @media (max-width: 580px) {
   .heart-frequency-group { flex-wrap: wrap; justify-content: flex-end; }
   .heart-rhythm-options { grid-template-columns: 1fr; }
+  .deco-item-grid { grid-template-columns: 1fr; }
+  .status-grid { grid-template-columns: 1fr; }
+  .status-modal-footer { align-items: flex-start; flex-direction: column; }
 }
 

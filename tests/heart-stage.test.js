@@ -63,7 +63,7 @@ function baseData(date, entry) {
 
 test("runHeartbeatTick: 闸放行时暂存心意被投递（补 deliveredAt，风铃响）", async () => {
   const date = todayStr();
-  const now = Date.now();
+  const now = new Date(`${date}T10:00:00+08:00`).getTime();
   // 预置一条已生成但未投递的暂存心意（stagedAt 已设，deliveredAt 空）
   writeData({
     ...baseData(date, makeEntry(date, "x")),
@@ -97,7 +97,7 @@ test("runHeartbeatTick: 闸放行时暂存心意被投递（补 deliveredAt，�
 
 test("runHeartbeatTick: 闸不过时暂存心意保持未投递，闸放行后才投递", async () => {
   const date = todayStr();
-  const offlineNow = Date.now();
+  const offlineNow = new Date(`${date}T10:00:00+08:00`).getTime();
   writeData({
     ...baseData(date, makeEntry(date, "x")),
     heartInbox: [{

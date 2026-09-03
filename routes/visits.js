@@ -1,9 +1,6 @@
 // routes/visits.js — 展板与互动域路由
 // /api/heartbeat-check、/api/data（展板数据）、/api/visit（互动/礼物/恶作剧）、/api/update-narrative、/api/current-agent、/api/mark-read
 
-import fs from "node:fs";
-import path from "node:path";
-import os from "node:os";
 import {
   loadData,
   saveData,
@@ -17,6 +14,11 @@ import {
   randomTip,
   withDataLock,
   findMostActiveAgentId,
+  getCurrentStatus,
+  getStatusCatalog,
+  getPublicStatusCollection,
+  normalizeDecorationState,
+  STATUS_DURATION_OPTIONS,
 } from "../lib/data.js";
 import { getHeartSummary } from "../lib/hearts.js";
 import { requestHeartbeatTick } from "../lib/heartbeat.js";
@@ -32,8 +34,6 @@ import {
 import { performVisit } from "../lib/actions.js";
 import { isValidAgentId } from "../lib/validate.js";
 import { readBody, json } from "./_helpers.js";
-
-const HANA_HOME = process.env.HANA_HOME || path.join(os.homedir(), ".hanako");
 
 export function registerVisits(app, ctx) {
   const bus = ctx.bus || ctx._bus;
@@ -113,6 +113,7 @@ export function registerVisits(app, ctx) {
       if (info.hidden) continue; // 用户隐藏的伙伴不在展板显示
       const p = today.partners[id];
       const act = activity[id] || {};
+      const currentStatus = getCurrentStatus(data, id);
       let active = !!p?.contributed;
       let doing = "";
 
@@ -134,39 +135,13 @@ export function registerVisits(app, ctx) {
         doing = randomIdle(data.idlePool || []);
       }
 
-      // 检查是否有真实头像
-      const avatarPath = path.join(
-        HANA_HOME,
-        "agents",
-        id,
-        "avatars",
-        "agent.png",
-      );
-      const hasAvatar = fs.existsSync(avatarPath);
-
-      // 装饰数据迁移（兼容旧格式 → 新格式）
+      // 装饰数据迁移：兼容旧格式，同时清掉已经移除的卡面字段。
       var deco = info.decorations;
-      if (deco && !deco.owned) {
-        // 旧格式: { avatarFrame: 'id', cardBg: null, title: null }
-        var newDeco = {
-          owned: { avatarFrame: [], cardBg: [], title: [] },
-          equipped: { avatarFrame: null, cardBg: null, title: null },
-        };
-        if (deco.avatarFrame) {
-          newDeco.owned.avatarFrame.push(deco.avatarFrame);
-          newDeco.equipped.avatarFrame = deco.avatarFrame;
-        }
-        if (deco.cardBg) {
-          newDeco.owned.cardBg.push(deco.cardBg);
-          newDeco.equipped.cardBg = deco.cardBg;
-        }
-        if (deco.title) {
-          newDeco.owned.title.push(deco.title);
-          newDeco.equipped.title = deco.title;
-        }
-        info.decorations = newDeco;
-        deco = newDeco;
-        decoMigrated = true;
+      if (deco) {
+        const normalizedDeco = normalizeDecorationState(deco);
+        if (JSON.stringify(normalizedDeco) !== JSON.stringify(deco)) decoMigrated = true;
+        info.decorations = normalizedDeco;
+        deco = normalizedDeco;
       }
 
       partners.push({
@@ -175,11 +150,15 @@ export function registerVisits(app, ctx) {
         color: info.color,
         active,
         doing,
-        avatarUrl: hasAvatar ? `/api/avatar/${id}` : "",
+        // 头像路由会优先返回自定义头像，没有时回退到该助手 Yuan 对应的 Hana 内置头像。
+        avatarUrl: `/api/avatar/${id}`,
         variables: info.variables || null,
+        status: currentStatus,
+        // 高级状态按伙伴分别解锁，页面在装饰商店切换伙伴时直接读取这份目录。
+        statusCollection: getPublicStatusCollection(data, id).filter((item) => item.unlockCost > 0),
         decorations: deco || {
-          owned: { avatarFrame: [], cardBg: [], title: [] },
-          equipped: { avatarFrame: null, cardBg: null, title: null },
+          owned: { avatarFrame: [], title: [] },
+          equipped: { avatarFrame: null, title: null },
         },
         recharged: isRechargedToday(data, id),
       });
@@ -296,6 +275,7 @@ export function registerVisits(app, ctx) {
       interactItems: data.interactItems || [],
       prankItems: data.prankItems || [],
       decorationItems: data.decorationItems || [],
+      statusCollection: getPublicStatusCollection(data).filter((item) => item.unlockCost > 0),
     });
   });
 
@@ -310,7 +290,34 @@ export function registerVisits(app, ctx) {
   });
 
   // ════════════════════════════════════════
-  //  POST /api/update-narrative — 更新状态
+  //  GET /api/statuses — 读取公共状态池、伙伴专属状态和当前状态
+  // ════════════════════════════════════════
+  app.get("/api/statuses", (c) => {
+    const input = c.req.query("partnerId") || c.req.query("partner") || "";
+    const data = loadData();
+    if (!isValidAgentId(input)) return json({ success: false, error: "无效的助手 ID" }, 400);
+    const cfg = getPartnerConfig(data)[input];
+    if (!cfg) return json({ success: false, error: "助手不存在" }, 404);
+    if (cfg.hidden) return json({ success: false, error: "这位伙伴当前不在闲不住列表里" }, 400);
+    return json({
+      success: true,
+      partner: { id: input, name: cfg.name || input },
+      current: getCurrentStatus(data, input),
+      ...getStatusCatalog(data, input),
+      durationOptions: STATUS_DURATION_OPTIONS,
+    });
+  });
+
+  // ════════════════════════════════════════
+  //  POST /api/statuses — 状态由伙伴自己决定，保留路由只为给旧调用方明确提示
+  // ════════════════════════════════════════
+  app.post("/api/statuses", () => json({
+    success: false,
+    error: "状态由伙伴自己决定，不能手动替换",
+  }, 403));
+
+  // ════════════════════════════════════════
+  //  POST /api/update-narrative — 更新旧版“正在做什么”文字
   // ════════════════════════════════════════
   app.post("/api/update-narrative", async (c) => {
     return withDataLock(async () => {
