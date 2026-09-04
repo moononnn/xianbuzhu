@@ -4,7 +4,7 @@
 //   economy.js   经济与装饰域（光粒/充电/状态收藏/装饰/排序/隐藏/刷新）
 //   llm.js       模型配置域（供应商/自定义/补 Key/测试）
 //   fengling.js  风铃悬浮球域（启动/停止/状态/自动启动）
-//   settings.js  设置与杂项域（卸载/检查更新/头像/小纸条）
+//   settings.js  设置与杂项域（心意/状态开关/卸载/检查更新/头像/小纸条）
 // 本文件保持 register 入口与导出签名不变（default + named 双保险），测试与调用方零改动。
 
 import fs from "node:fs";

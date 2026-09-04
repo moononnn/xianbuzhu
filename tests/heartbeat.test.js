@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import {
   cancelHeartPlanForPartner,
   createHeartPlan,
+  disableHeartPlan,
   ensureDailyHeartPlan,
   evaluateDeliveryGates,
   HEART_RETRY_DELAYS_MS,
@@ -118,6 +119,27 @@ test("scheduleHeartRetry: 内容失败只允许一轮整批重试", () => {
   assert.equal(scheduleHeartRetry(entry, Date.parse(entry.nextAttemptAt), failure), "failed");
   assert.equal(entry.retryExhausted, true);
   assert.equal(entry.retryCount, 1);
+});
+
+test("disableHeartPlan: 关闭时取消未执行计划，重新开启可从当天重新排程", () => {
+  const data = {
+    heartSettings: { enabled: false, frequency: "medium" },
+    heartPlan: {
+      date: "2026-08-18",
+      frequency: "medium",
+      entries: [
+        { id: "planned", status: "planned", partnerId: "a" },
+        { id: "retry", status: "retry_wait", partnerId: "a" },
+        { id: "generating", status: "generating", partnerId: "a" },
+        { id: "delivered", status: "delivered", partnerId: "a" },
+      ],
+    },
+  };
+  assert.equal(disableHeartPlan(data, Date.parse("2026-08-18T05:00:00.000Z")), true);
+  assert.deepEqual(data.heartPlan, { date: null, frequency: "medium", entries: [] });
+  assert.equal(ensureDailyHeartPlan(data, "2026-08-18", () => 0), false, "关闭时不应创建计划");
+  data.heartSettings.enabled = true;
+  assert.equal(ensureDailyHeartPlan(data, "2026-08-18", () => 0), true, "重新开启后应重新排当天计划");
 });
 
 test("ensureDailyHeartPlan: 同一天同频率幂等，改频率才重滚", () => {

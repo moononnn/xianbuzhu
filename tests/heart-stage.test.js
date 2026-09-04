@@ -61,6 +61,54 @@ function baseData(date, entry) {
   };
 }
 
+test("runHeartbeatTick: 关闭主动心意时不生成、不投递，已有信箱内容保留", async () => {
+  const date = todayStr();
+  const now = new Date(`${date}T10:00:00+08:00`).getTime();
+  writeData({
+    ...baseData(date, makeEntry(date, "disabled")),
+    statusSettings: { autonomousEnabled: false },
+    heartSettings: { enabled: false, frequency: "low" },
+    heartInbox: [{
+      id: "heart-disabled-1",
+      partnerId: "hanako",
+      partnerName: "小花",
+      eventType: "scene",
+      sceneType: "trace",
+      gift: { id: "sticky-note", name: "便签", icon: "📝", price: 0 },
+      message: "我给你留了一张便签。",
+      createdAt: new Date(now - 10 * 60_000).toISOString(),
+      expiresAt: new Date(now + 72 * 3600_000).toISOString(),
+      status: "unread",
+      deliveredAt: null,
+      stagedAt: new Date(now - 10 * 60_000).toISOString(),
+    }],
+  });
+
+  await runHeartbeatTick({}, {
+    now,
+    date,
+    presenceReader: () => ({ online: true, lastActivityAt: now }),
+  });
+
+  let saved = readData();
+  assert.equal(saved.heartInbox[0].deliveredAt, null, "关闭时已有暂存心意也不应投递");
+  assert.equal(saved.heartInbox[0].status, "unread", "关闭时不应删除信箱内容");
+  assert.deepEqual(saved.heartPlan.entries, [], "关闭时应清掉尚未执行的计划");
+  assert.equal(saved.heartPlan.date, null);
+
+  saved.heartSettings.enabled = true;
+  // 只验证已有暂存心意的恢复投递，避免本测试另起一条随机生成计划。
+  saved.heartPlan = { date, frequency: "low", entries: [] };
+  writeData(saved);
+  await runHeartbeatTick({}, {
+    now: now + 60_000,
+    date,
+    presenceReader: () => ({ online: true, lastActivityAt: now + 60_000 }),
+  });
+  saved = readData();
+  assert.ok(saved.heartInbox[0].deliveredAt, "重新开启后，已有暂存心意可在合适时机投递");
+});
+
 test("runHeartbeatTick: 闸放行时暂存心意被投递（补 deliveredAt，风铃响）", async () => {
   const date = todayStr();
   const now = new Date(`${date}T10:00:00+08:00`).getTime();
@@ -167,6 +215,23 @@ test("runHeartbeatTick: 暂存保质期过后转 expired（淡忘，不吞、不
   const saved = readData();
   assert.equal(saved.heartInbox[0].status, "expired", "超期暂存应转淡忘");
   assert.equal(saved.heartInbox[0].archivedAt != null, true);
+});
+
+test("generateAndSaveHeart: 关闭主动心意时在生成入口直接停止", async () => {
+  const date = todayStr();
+  writeData({
+    ...baseData(date, makeEntry(date, "disabled-generation")),
+    statusSettings: { autonomousEnabled: false },
+    heartSettings: { enabled: false, frequency: "low" },
+  });
+  const { generateAndSaveHeart } = await import("../lib/hearts.js");
+  const result = await generateAndSaveHeart({
+    entry: makeEntry(date, "disabled-generation"),
+    partnerId: "hanako",
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.failure.kind, "disabled");
+  assert.deepEqual(readData().heartInbox, []);
 });
 
 test("generateAndSaveHeart: 暂存上限满了不再生成（不烧模型，旧的不堆）", async () => {

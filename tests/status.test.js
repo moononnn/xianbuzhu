@@ -144,15 +144,128 @@ test("状态收藏：余额不足时不扣款，手动换锁定状态会被拒�
   assert.match(manual.error, /装饰商店/);
 });
 
-test("状态收藏：自动临时状态不被付费锁拦住", () => {
+test("状态收藏：未解锁高级状态不能通过自动状态临时使用", () => {
   const data = fixture();
   const result = setPartnerStatus(data, "hanako", {
     statusId: "brain-meeting",
     source: "autonomous",
     persist: false,
   });
-  assert.equal(result.ok, true);
-  assert.equal(result.current.id, "brain-meeting");
+  assert.equal(result.ok, false);
+  assert.match(result.error, /装饰商店/);
+
+  const textResult = setPartnerStatus(data, "hanako", {
+    status: "脑内开会",
+    source: "autonomous",
+    persist: false,
+  });
+  assert.equal(textResult.ok, false, "不能用 statusText 把付费状态伪装成专属临时状态");
+  assert.match(textResult.error, /装饰商店/);
+});
+
+test("状态读取：未解锁高级状态不会显示为当前徽章", () => {
+  const data = fixture();
+  const now = new Date(`${todayStr()}T12:00:00+08:00`).getTime();
+  data.days[todayStr()] = {
+    date: todayStr(),
+    partners: {
+      hanako: {
+        status: {
+          id: "brain-meeting",
+          text: "脑内开会",
+          icon: "🧠",
+          category: "整活",
+          tone: "rose",
+          scope: "public",
+          source: "autonomous",
+          duration: "four_hours",
+          setAt: new Date(now - 30 * 60 * 1000).toISOString(),
+          expiresAt: new Date(now + 3.5 * 60 * 60 * 1000).toISOString(),
+        },
+      },
+    },
+  };
+  assert.equal(getCurrentStatus(data, "hanako", now), null);
+
+  data.partnerConfig.hanako.unlockedStatuses = ["brain-meeting"];
+  assert.equal(getCurrentStatus(data, "hanako", now).id, "brain-meeting");
+});
+
+test("状态读取：未解锁高级状态跨日继承也不会显示", () => {
+  const data = fixture();
+  const now = new Date(`${todayStr()}T12:00:00+08:00`).getTime();
+  const yesterday = dateKeyOffset(-1);
+  data.days = {
+    [yesterday]: {
+      date: yesterday,
+      partners: {
+        hanako: {
+          status: {
+            id: "brain-meeting",
+            text: "脑内开会",
+            icon: "🧠",
+            category: "整活",
+            tone: "rose",
+            scope: "public",
+            source: "autonomous",
+            duration: "until_changed",
+            setAt: new Date(now - 30 * 60 * 1000).toISOString(),
+            expiresAt: null,
+          },
+        },
+      },
+    },
+  };
+  const current = getCurrentStatus(data, "hanako", now);
+  assert.equal(current.source, "baseline");
+});
+
+test("状态读取：已下架公共状态不会被旧记录当成免费徽章", () => {
+  const data = fixture();
+  const now = new Date(`${todayStr()}T12:00:00+08:00`).getTime();
+  data.statusLibrary = {
+    public: [{
+      id: "retired-paid-status",
+      text: "旧高级",
+      icon: "🪄",
+      category: "心情",
+      tone: "rose",
+      scope: "public",
+      unlockCost: 800,
+      unlocked: true,
+    }],
+  };
+  data.days[todayStr()] = {
+    date: todayStr(),
+    partners: {
+      hanako: {
+        status: {
+          id: "retired-paid-status",
+          text: "旧高级",
+          icon: "🪄",
+          category: "心情",
+          tone: "rose",
+          scope: "public",
+          source: "autonomous",
+          duration: "today",
+          setAt: new Date(now - 30 * 60 * 1000).toISOString(),
+          expiresAt: null,
+        },
+      },
+    },
+  };
+  assert.equal(getCurrentStatus(data, "hanako", now), null);
+  assert.equal(getPublicStatusCollection(data, "hanako").some((item) => item.id === "retired-paid-status"), false);
+  const rejected = setPartnerStatus(data, "hanako", {
+    statusId: "retired-paid-status",
+    source: "autonomous",
+    now,
+  });
+  assert.equal(rejected.ok, false);
+  const unlockRejected = unlockPublicStatus(data, "hanako", "retired-paid-status", now);
+  assert.deepEqual(unlockRejected, { ok: false, error: "这条状态不存在" });
+  assert.equal(data.jar, 0);
+  assert.deepEqual(data.partnerConfig.hanako.unlockedStatuses, []);
 });
 
 test("状态收藏：从未解锁过的伙伴补齐空数组，不免费继承旧全局解锁标记", () => {
@@ -194,6 +307,28 @@ test("卡面/称号装饰迁移：保留头像框，移除旧 cardBg 与称号�
       equipped: { avatarFrame: "avatar_star" },
     },
   );
+});
+
+test("状态设置：关闭后伙伴不能新增、切换或清除状态", () => {
+  const data = fixture();
+  data.statusSettings = { autonomousEnabled: false };
+  const partner = setPartnerStatus(data, "hanako", {
+    statusId: "inspiration",
+    source: "partner",
+  });
+  const autonomous = setPartnerStatus(data, "hanako", {
+    statusId: "inspiration",
+    source: "autonomous",
+  });
+  const clear = setPartnerStatus(data, "hanako", {
+    clear: true,
+    source: "partner",
+  });
+  for (const result of [partner, autonomous, clear]) {
+    assert.equal(result.ok, false);
+    assert.match(result.error, /功能已关闭/);
+  }
+  assert.equal(getCurrentStatus(data, "hanako").source, "baseline");
 });
 
 test("状态切换：可以换上公共状态，不把它误记成正在工作", () => {

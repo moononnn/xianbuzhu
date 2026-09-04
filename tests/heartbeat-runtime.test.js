@@ -55,6 +55,133 @@ test("runHeartbeatTick: 已生成当天计划后隐藏助手，旧计划也会�
   assert.equal(presenceCalled, false);
 });
 
+test("runHeartbeatTick: 伙伴自主状态关闭时，主动心意仍独立处理", async () => {
+  const date = todayStr();
+  const now = new Date(`${date}T12:00:00+08:00`).getTime();
+  const entry = {
+    id: `heart-plan-${date}-status-off`,
+    partnerId: "hanako",
+    scheduledAt: new Date(now - 60_000).toISOString(),
+    status: "planned",
+  };
+  writeData({
+    days: {},
+    jar: 0,
+    statusSettings: { autonomousEnabled: false },
+    partnerConfig: {
+      hanako: { name: "小花", variables: { energy: 100, mood: 60, affection: 20 } },
+    },
+    heartSettings: { frequency: "low" },
+    heartPlan: { date, frequency: "low", entries: [entry] },
+    heartInbox: [],
+    shopItems: [{ id: "coffee", name: "咖啡", icon: "☕", price: 25 }],
+  });
+
+  await runHeartbeatTick({}, {
+    now,
+    date,
+    presenceReader: () => ({ online: true, lastActivityAt: now }),
+  });
+
+  const saved = readData();
+  assert.equal(saved.heartPlan.entries[0].status, "failed", "状态开关不应拦截主动心意计划");
+  assert.equal(saved.heartPlan.entries[0].failureKind, "model_not_configured");
+});
+
+test("runHeartbeatTick: 模型回包在途时关闭心意，不把旧回包写入信箱", async () => {
+  const date = todayStr();
+  const now = new Date(`${date}T12:00:00+08:00`).getTime();
+  const entry = {
+    id: `heart-plan-${date}-disable-in-flight`,
+    partnerId: "hanako",
+    scheduledAt: new Date(now - 60_000).toISOString(),
+    status: "planned",
+  };
+  fs.writeFileSync(
+    path.join(home, "provider-catalog.json"),
+    JSON.stringify({
+      providers: {
+        test: {
+          base_url: "https://heart.test/v1",
+          api_key: "test-key",
+          api: "openai-completions",
+          models: ["test-model"],
+        },
+      },
+    }),
+    "utf8",
+  );
+  writeData({
+    days: {},
+    jar: 0,
+    statusSettings: { autonomousEnabled: false },
+    partnerConfig: {
+      hanako: {
+        name: "小花",
+        temperamentSource: "user",
+        surfaceLayer: { tag: "温柔" },
+        innerLayer: { tag: "温柔" },
+        variables: { energy: 100, mood: 60, affection: 20 },
+      },
+    },
+    llmConfig: { providerId: "test", modelId: "test-model" },
+    heartSettings: { frequency: "low" },
+    heartPlan: { date, frequency: "low", entries: [entry] },
+    heartInbox: [],
+    heartScenes: [],
+    shopItems: [{ id: "coffee", name: "咖啡", icon: "☕", price: 25 }],
+  });
+
+  let release;
+  let entered;
+  const enteredPromise = new Promise((resolve) => { entered = resolve; });
+  const gate = new Promise((resolve) => { release = resolve; });
+  const originalFetch = global.fetch;
+  let calls = 0;
+  global.fetch = async () => {
+    calls += 1;
+    if (calls === 1) {
+      entered();
+      await gate;
+    }
+    const content = calls % 2 === 1
+      ? "我把一杯咖啡放在你手边，热气还在，忙完记得喝两口。"
+      : '{"pass":true}';
+    return {
+      ok: true,
+      status: 200,
+      async json() {
+        return { choices: [{ message: { content } }] };
+      },
+    };
+  };
+
+  try {
+    const pending = runHeartbeatTick({}, {
+      now,
+      date,
+      presenceReader: () => ({ online: true, lastActivityAt: now }),
+    });
+    await enteredPromise;
+    const switched = readData();
+    switched.heartSettings.enabled = false;
+    switched.heartPlan = { date: null, frequency: "low", entries: [] };
+    writeData(switched);
+    // 模拟用户在旧请求返回前又重新开启：旧计划 ID 已失效，旧回包仍不得复活。
+    switched.heartSettings.enabled = true;
+    writeData(switched);
+    release();
+    await pending;
+  } finally {
+    global.fetch = originalFetch;
+  }
+
+  const saved = readData();
+  assert.equal(calls >= 2, true, "应确实进入心意模型请求");
+  assert.equal(saved.heartInbox.length, 0, "关闭后的在途回包不得落入信箱");
+  assert.equal(saved.heartPlan.date, null, "关闭后的旧计划不得留作补发");
+});
+
 test("runHeartbeatTick: 未配置模型时不落固定模板心意", async () => {
   const date = todayStr();
   const testNow = new Date(`${date}T12:00:00+08:00`).getTime();

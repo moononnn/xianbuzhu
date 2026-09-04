@@ -130,6 +130,9 @@ test("getHeartSummary: 保留时长内全部展示，不按数量截断，并标
   assert.equal(summary.hasHearts, true);
   assert.equal(summary.hasNewHearts, true);
   assert.equal(summary.showHeartGuide, false, "已有阅读时间时不再弹首次引导");
+  data.heartSettings.enabled = false;
+  const disabledSummary = getHeartSummary(data, Date.parse("2026-08-18T06:00:00.000Z"));
+  assert.equal(disabledSummary.hearts.length, 3, "关闭主动心意也不能隐藏或删除已有信箱内容");
 });
 
 test("archiveExpiredHearts: 过期归档，不制造红点或待办", () => {
@@ -584,6 +587,7 @@ test("ensureHeartState: 旧回礼状态回到普通可见状态并清掉旧设�
     partnerConfig: {},
   };
   ensureHeartState(data);
+  assert.equal(data.heartSettings.enabled, true, "旧数据缺少开关时默认开启");
   assert.equal(data.heartSettings.returnGiftEnabled, undefined);
   assert.equal(data.heartInbox[0].status, "read");
   assert.equal(data.heartInbox[0].previousStatus, undefined);

@@ -1,5 +1,5 @@
 // routes/settings.js — 设置与杂项域路由
-// /api/hearts*、/api/heart-settings、/api/temperament、/api/uninstall、/api/check-update、/api/avatar、/api/notes*
+// /api/hearts*、/api/heart-settings、/api/status-settings、/api/temperament、/api/uninstall、/api/check-update、/api/avatar、/api/notes*
 
 import fs from "node:fs";
 import path from "node:path";
@@ -29,6 +29,7 @@ import {
   TEMPERAMENT_TAGS,
 } from "../lib/temperament.js";
 import { readBody, json } from "./_helpers.js";
+import { disableHeartPlan } from "../lib/heartbeat.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const HANA_HOME = process.env.HANA_HOME || path.join(os.homedir(), ".hanako");
@@ -66,36 +67,79 @@ export function registerSettings(app, ctx) {
   });
 
   // ════════════════════════════════════════
-  //  GET/POST /api/heart-settings — 主动心意频率
+  //  GET/POST /api/heart-settings — 主动心意开关与频率
   // ════════════════════════════════════════
   app.get("/api/heart-settings", (c) => {
     const data = loadData();
     return json({
       success: true,
       settings: {
+        enabled: data.heartSettings?.enabled !== false,
         frequency: data.heartSettings?.frequency || "low",
       },
     });
   });
 
   app.post("/api/heart-settings", async (c) => {
-    const input = await readBody(c);
+    const input = (await readBody(c)) || {};
     return withDataLock(async () => {
       const data = loadData();
       const frequency = input.frequency;
       if (frequency !== undefined && !["low", "medium", "high"].includes(frequency)) {
         return json({ success: false, error: "频率选项无效" }, 400);
       }
+      if (input.enabled !== undefined && typeof input.enabled !== "boolean") {
+        return json({ success: false, error: "开关值无效" }, 400);
+      }
       const oldFrequency = data.heartSettings?.frequency || "low";
+      const previousEnabled = data.heartSettings?.enabled !== false;
+      const enabled = input.enabled === undefined
+        ? previousEnabled
+        : input.enabled;
       data.heartSettings = {
         ...(data.heartSettings || {}),
+        enabled,
         frequency: frequency || oldFrequency,
       };
+      // 关闭与重新开启都不追赶关闭期间的旧计划；已进入信箱的心意不受影响。
+      if (!enabled || !previousEnabled) disableHeartPlan(data);
       if (frequency && frequency !== oldFrequency) {
         data.heartPlan = { date: null, frequency, entries: [] };
       }
       if (!saveData(data)) return json({ success: false, error: "数据保存失败，请重试" }, 500);
       return json({ success: true, settings: data.heartSettings });
+    });
+  });
+
+  // ════════════════════════════════════════
+  //  GET/POST /api/status-settings — 伙伴自主状态开关
+  // ════════════════════════════════════════
+  app.get("/api/status-settings", (c) => {
+    const data = loadData();
+    return json({
+      success: true,
+      settings: {
+        autonomousEnabled: data.statusSettings?.autonomousEnabled !== false,
+      },
+    });
+  });
+
+  app.post("/api/status-settings", async (c) => {
+    const input = await readBody(c);
+    if (!input || typeof input.enabled !== "boolean") {
+      return json({ success: false, error: "开关值无效" }, 400);
+    }
+    return withDataLock(async () => {
+      const data = loadData();
+      data.statusSettings = {
+        ...(data.statusSettings || {}),
+        autonomousEnabled: input.enabled,
+      };
+      if (!saveData(data)) return json({ success: false, error: "数据保存失败，请重试" }, 500);
+      return json({
+        success: true,
+        settings: { autonomousEnabled: data.statusSettings.autonomousEnabled !== false },
+      });
     });
   });
 

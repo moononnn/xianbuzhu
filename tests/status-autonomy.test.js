@@ -12,13 +12,22 @@ process.env.HANA_HOME = home;
 
 const {
   STATUS_AUTONOMY_INTERVAL_MS,
+  STATUS_AUTONOMY_KEEP_IDLE_INTERVAL_MS,
   STATUS_AUTONOMY_CHECK_TIMEOUT_MS,
   STATUS_AUTONOMY_FAILURE_DELAYS_MS,
   buildAutonomousStatusPrompt,
   parseAutonomousStatusDecision,
   runAutonomousStatusTick,
 } = await import("../lib/status-autonomy.js");
-const { defaultData, getCurrentStatus, loadData, nowISO, saveData, todayStr } = await import("../lib/data.js");
+const {
+  STATUS_ROUTINE_INTERVAL_MS,
+  defaultData,
+  getCurrentStatus,
+  loadData,
+  nowISO,
+  saveData,
+  todayStr,
+} = await import("../lib/data.js");
 const { runHeartbeatTick } = await import("../lib/heartbeat.js");
 if (previousHome === undefined) delete process.env.HANA_HOME;
 else process.env.HANA_HOME = previousHome;
@@ -166,6 +175,46 @@ test("自主状态提示：空闲时可按性格自选，也可以留白", () =>
   assert.match(prompt, /不要为了填满展板/);
 });
 
+test("自主状态提示：未解锁高级状态不进入候选列表", () => {
+  const prompt = buildAutonomousStatusPrompt({
+    partnerId: "hanako",
+    partnerName: "小花",
+    activity: { conversationTitle: "整理状态池" },
+    catalog: {
+      publicStatuses: [
+        { id: "brain-meeting", text: "脑内开会", icon: "🧠", category: "整活", tone: "rose", group: "fun", unlocked: false },
+        { id: "quiet-work", text: "专注", icon: "📝", category: "做事", tone: "focus", group: "work", unlocked: true },
+      ],
+    },
+  });
+  assert.match(prompt, /quiet-work/);
+  assert.doesNotMatch(prompt, /brain-meeting/);
+});
+
+test("自主状态：候选列表按伙伴解锁资格隔离", async () => {
+  const now = new Date(`${todayStr()}T12:03:00+08:00`).getTime();
+  const data = baseData();
+  data.partnerConfig.hanako.unlockedStatuses = ["brain-meeting"];
+  data.partnerConfig.other = {
+    name: "另一位伙伴",
+    variables: { energy: 70, mood: 65, affection: 20 },
+  };
+  writeData(data);
+  const prompts = new Map();
+  const result = await runAutonomousStatusTick({}, {
+    now,
+    activitySnapshot: {},
+    autonomousStatusSampler: async (input, candidate) => {
+      prompts.set(candidate.partnerId, input.messages[0].content);
+      return '{"action":"keep"}';
+    },
+  });
+
+  assert.equal(result.checked, 2);
+  assert.match(prompts.get("hanako"), /brain-meeting/);
+  assert.doesNotMatch(prompts.get("other"), /brain-meeting/);
+});
+
 test("自主状态：空闲时伙伴可以自己选长期状态", async () => {
   const now = new Date(`${todayStr()}T12:04:00+08:00`).getTime();
   const data = baseData();
@@ -199,20 +248,26 @@ test("自主状态：空闲时伙伴可以自己选长期状态", async () => {
   assert.equal(partnerDay.statusHistory.at(-1).trigger, "idle");
 });
 
-test("自主状态：未解锁高级状态不能长期常驻", async () => {
+test("自主状态：未解锁高级状态不能自动使用", async () => {
   const now = new Date(`${todayStr()}T12:05:00+08:00`).getTime();
   writeData(baseData());
   const result = await runAutonomousStatusTick({}, {
     now,
     activitySnapshot: {},
-    autonomousStatusSampler: async () => '{"action":"update","statusId":"brain-meeting","duration":"until_changed","trigger":"idle"}',
+    autonomousStatusSampler: async () => '{"action":"update","statusId":"brain-meeting","duration":"four_hours","trigger":"idle"}',
   });
 
   assert.equal(result.ok, false);
-  assert.equal(result.error, "未解锁的高级状态只能临时自动展示");
+  assert.equal(result.error, "这条状态还没解锁，请先去装饰商店的状态收藏看看");
   const saved = readData();
   assert.equal(saved.days?.[todayStr()]?.partners?.hanako?.status, undefined);
-  assert.equal(saved.partnerConfig.hanako.statusAutonomy.lastResult, "failed");
+  assert.equal(saved.partnerConfig.hanako.statusAutonomy.lastResult, "rejected");
+  assert.equal(saved.partnerConfig.hanako.statusAutonomy.failureCount, 0, "业务拒绝不能计入模型失败退避");
+  assert.equal(
+    Date.parse(saved.partnerConfig.hanako.statusAutonomy.nextCheckAt),
+    now + STATUS_AUTONOMY_KEEP_IDLE_INTERVAL_MS,
+    "业务拒绝应按空闲无变化节流，而不是几分钟后重复空转",
+  );
 });
 
 test("自主状态：空闲时没有个体表达也可以保持空白", async () => {
@@ -557,6 +612,76 @@ test("自主状态：90分钟内不重复调用，常态状态仍受4小时 rout
   assert.equal(calls.length, 2);
 });
 
+test("自主状态：重复挂同一状态也按无变化走长节流", async () => {
+  const now = new Date(`${todayStr()}T13:30:00+08:00`).getTime();
+  const data = baseData();
+  data.days[todayStr()] = {
+    date: todayStr(),
+    partners: {
+      hanako: {
+        contributed: false,
+        narrative: "",
+        effortLP: 0,
+        status: {
+          id: "quiet-work",
+          text: "专注",
+          icon: "📝",
+          category: "做事",
+          tone: "focus",
+          scope: "public",
+          duration: "today",
+          setAt: nowISO(now - STATUS_ROUTINE_INTERVAL_MS),
+          expiresAt: null,
+          source: "autonomous",
+        },
+        statusHistory: [{
+          id: "quiet-work",
+          text: "专注",
+          icon: "📝",
+          category: "做事",
+          tone: "focus",
+          scope: "public",
+          duration: "today",
+          setAt: nowISO(now - STATUS_ROUTINE_INTERVAL_MS),
+          source: "autonomous",
+          trigger: "idle",
+          moodBand: "bright",
+          energyBand: "high",
+        }],
+      },
+    },
+  };
+  writeData(data);
+  const calls = [];
+  const unchanged = await runAutonomousStatusTick({}, {
+    now,
+    activitySnapshot: {},
+    autonomousStatusSampler: samplerReturning('{"action":"update","statusId":"quiet-work"}', calls),
+  });
+  assert.equal(unchanged.action, "unchanged");
+  assert.equal(calls.length, 1);
+  assert.equal(
+    readData().partnerConfig.hanako.statusAutonomy.nextCheckAt,
+    nowISO(now + STATUS_ROUTINE_INTERVAL_MS),
+  );
+
+  const tooSoon = await runAutonomousStatusTick({}, {
+    now: now + STATUS_AUTONOMY_INTERVAL_MS + 1,
+    activitySnapshot: {},
+    autonomousStatusSampler: samplerReturning('{"action":"keep"}', calls),
+  });
+  assert.equal(tooSoon.skipped, "not-due");
+  assert.equal(calls.length, 1);
+
+  const newActivity = await runAutonomousStatusTick({}, {
+    now: now + STATUS_AUTONOMY_INTERVAL_MS + 2,
+    activitySnapshot: { hanako: { title: "刚开始聊天" } },
+    autonomousStatusSampler: samplerReturning('{"action":"keep"}', calls),
+  });
+  assert.equal(newActivity.action, "keep");
+  assert.equal(calls.length, 2, "新活动仍应打断 unchanged 后的长节流");
+});
+
 test("自主状态：保持不写历史，失败按退避重试而不是每分钟撞模型", async () => {
   const now = new Date(`${todayStr()}T14:00:00+08:00`).getTime();
   writeData(baseData());
@@ -570,7 +695,8 @@ test("自主状态：保持不写历史，失败按退避重试而不是每分�
   assert.equal(saved.days[todayStr()]?.partners?.hanako?.statusHistory, undefined);
   assert.equal(getCurrentStatus(saved, "hanako", now).source, "baseline");
   assert.equal(saved.partnerConfig.hanako.statusAutonomy.lastResult, "keep");
-  assert.equal(saved.partnerConfig.hanako.statusAutonomy.nextCheckAt, nowISO(now + STATUS_AUTONOMY_INTERVAL_MS));
+  assert.equal(saved.partnerConfig.hanako.statusAutonomy.nextCheckAt, nowISO(now + STATUS_AUTONOMY_KEEP_IDLE_INTERVAL_MS));
+  assert.equal(typeof saved.partnerConfig.hanako.statusAutonomy.lastSignalFingerprint, "string");
 
   const beforeFailure = now + STATUS_AUTONOMY_INTERVAL_MS + 1;
   writeData(baseData());
@@ -593,8 +719,12 @@ test("自主状态：保持不写历史，失败按退避重试而不是每分�
   });
   assert.equal(hallucinated.ok, false);
   saved = readData();
-  assert.equal(saved.partnerConfig.hanako.statusAutonomy.failureCount, 1);
-  assert.equal(Date.parse(saved.partnerConfig.hanako.statusAutonomy.nextCheckAt), beforeFailure + 1 + STATUS_AUTONOMY_FAILURE_DELAYS_MS[0]);
+  assert.equal(saved.partnerConfig.hanako.statusAutonomy.failureCount, 0, "衣柜外状态 ID 属于业务拒绝，不应计入模型失败");
+  assert.equal(saved.partnerConfig.hanako.statusAutonomy.lastResult, "rejected");
+  assert.equal(
+    Date.parse(saved.partnerConfig.hanako.statusAutonomy.nextCheckAt),
+    beforeFailure + 1 + STATUS_AUTONOMY_KEEP_IDLE_INTERVAL_MS,
+  );
 
   const notYet = await runAutonomousStatusTick({}, {
     now: beforeFailure + STATUS_AUTONOMY_FAILURE_DELAYS_MS[0] - 1,
@@ -602,6 +732,106 @@ test("自主状态：保持不写历史，失败按退避重试而不是每分�
   });
   assert.equal(notYet.skipped, "not-due");
   assert.equal(calls.length, 3);
+});
+
+test("自主状态：keep 后没有新信号不重复询问，但新活动可提前打断长节流", async () => {
+  const now = new Date(`${todayStr()}T14:10:00+08:00`).getTime();
+  writeData(baseData());
+  const calls = [];
+  const first = await runAutonomousStatusTick({}, {
+    now,
+    activitySnapshot: {},
+    autonomousStatusSampler: samplerReturning('{"action":"keep"}', calls),
+  });
+  assert.equal(first.action, "keep");
+  assert.equal(calls.length, 1);
+
+  const sameContext = await runAutonomousStatusTick({}, {
+    now: now + STATUS_AUTONOMY_INTERVAL_MS + 1,
+    activitySnapshot: {},
+    autonomousStatusSampler: samplerReturning('{"action":"update","statusId":"inspiration"}', calls),
+  });
+  assert.equal(sameContext.skipped, "not-due");
+  assert.equal(calls.length, 1, "keep 后没有新信号时不应按 90 分钟重复询问");
+
+  const changedActivity = await runAutonomousStatusTick({}, {
+    now: now + STATUS_AUTONOMY_INTERVAL_MS + 2,
+    activitySnapshot: { hanako: { title: "开始处理新事情" } },
+    autonomousStatusSampler: samplerReturning('{"action":"update","statusId":"inspiration","trigger":"activity"}', calls),
+  });
+  assert.equal(changedActivity.action, "update");
+  assert.equal(calls.length, 2, "新活动应在最短间隔后打断 keep 的长节流");
+});
+
+test("自主状态：keep 后同一事件不重复触发，新事件仍可唤醒判断", async () => {
+  const now = new Date(`${todayStr()}T14:20:00+08:00`).getTime();
+  const data = baseData();
+  data.days[todayStr()] = {
+    date: todayStr(),
+    partners: {
+      hanako: {
+        contributed: false,
+        narrative: "",
+        effortLP: 0,
+        events: [{ type: "gift", itemName: "一杯茶", ts: nowISO(now) }],
+      },
+    },
+  };
+  writeData(data);
+  const calls = [];
+  const first = await runAutonomousStatusTick({}, {
+    now,
+    activitySnapshot: {},
+    autonomousStatusSampler: samplerReturning('{"action":"keep"}', calls),
+  });
+  assert.equal(first.action, "keep");
+
+  const sameEvent = await runAutonomousStatusTick({}, {
+    now: now + STATUS_AUTONOMY_INTERVAL_MS + 1,
+    activitySnapshot: {},
+    autonomousStatusSampler: samplerReturning('{"action":"update","statusId":"inspiration"}', calls),
+  });
+  assert.equal(sameEvent.skipped, "not-due");
+  assert.equal(calls.length, 1, "同一条旧事件不能反复打断 keep 节流");
+
+  const changed = readData();
+  changed.days[todayStr()].partners.hanako.events.push({
+    type: "gift",
+    itemName: "一束花",
+    ts: nowISO(now + STATUS_AUTONOMY_INTERVAL_MS + 2),
+  });
+  writeData(changed);
+  const newEvent = await runAutonomousStatusTick({}, {
+    now: now + STATUS_AUTONOMY_INTERVAL_MS + 2,
+    activitySnapshot: {},
+    autonomousStatusSampler: samplerReturning('{"action":"update","statusId":"inspiration","trigger":"event"}', calls),
+  });
+  assert.equal(newEvent.action, "update");
+  assert.equal(calls.length, 2, "新事件应在最短间隔后唤醒判断");
+});
+
+test("自主状态：空闲 keep 在 24 小时内只检查一次，下一生活日再恢复判断", async () => {
+  const start = new Date(`${todayStr()}T00:00:00+08:00`).getTime();
+  writeData(baseData());
+  const calls = [];
+  for (let index = 0; index < 16; index += 1) {
+    const result = await runAutonomousStatusTick({}, {
+      now: start + index * STATUS_AUTONOMY_INTERVAL_MS,
+      activitySnapshot: {},
+      autonomousStatusSampler: samplerReturning('{"action":"keep"}', calls),
+    });
+    if (index === 0) assert.equal(result.action, "keep");
+    else assert.equal(result.skipped, "not-due");
+  }
+  assert.equal(calls.length, 1, "同一天无新信号时不应每 90 分钟重复询问");
+
+  const nextDay = await runAutonomousStatusTick({}, {
+    now: start + STATUS_AUTONOMY_KEEP_IDLE_INTERVAL_MS + 1,
+    activitySnapshot: {},
+    autonomousStatusSampler: samplerReturning('{"action":"keep"}', calls),
+  });
+  assert.equal(nextDay.action, "keep");
+  assert.equal(calls.length, 2, "下一生活日仍应重新判断一次");
 });
 
 test("自主状态：后台模型失败和悬挂都有超时退避，过期 claim 可以被下一轮取回", async () => {
@@ -665,6 +895,56 @@ test("自主状态：每日上限和隐藏伙伴都不会触发后台模型调�
   });
   assert.equal(result.skipped, "not-due");
   assert.equal(calls.length, 0);
+});
+
+test("自主状态：设置关闭时跳过后台判断且不写入状态", async () => {
+  const data = baseData();
+  data.statusSettings = { autonomousEnabled: false };
+  writeData(data);
+  const calls = [];
+  const result = await runAutonomousStatusTick({}, {
+    now: new Date(`${todayStr()}T16:00:00+08:00`).getTime(),
+    autonomousStatusSampler: samplerReturning('{"action":"update","statusId":"inspiration"}', calls),
+  });
+  assert.equal(result.skipped, "disabled");
+  assert.equal(calls.length, 0);
+  assert.equal(readData().partnerConfig.hanako.statusAutonomy, undefined);
+
+  const enabledData = readData();
+  enabledData.statusSettings = { autonomousEnabled: true };
+  writeData(enabledData);
+  const resumed = await runAutonomousStatusTick({}, {
+    now: new Date(`${todayStr()}T17:40:00+08:00`).getTime(),
+    autonomousStatusSampler: samplerReturning('{"action":"keep"}', calls),
+  });
+  assert.equal(resumed.action, "keep");
+  assert.equal(calls.length, 1, "重新开启后应恢复后台状态判断");
+});
+
+test("状态开关：模型请求期间关闭也不会应用旧回包", async () => {
+  const now = new Date(`${todayStr()}T16:10:00+08:00`).getTime();
+  writeData(baseData());
+  let entered = false;
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const pending = runAutonomousStatusTick({}, {
+    now,
+    autonomousStatusSampler: async () => {
+      entered = true;
+      await gate;
+      return '{"action":"update","statusId":"inspiration"}';
+    },
+  });
+  while (!entered) await new Promise((resolve) => setImmediate(resolve));
+  const data = readData();
+  data.statusSettings = { autonomousEnabled: false };
+  writeData(data);
+  release();
+
+  const result = await pending;
+  assert.equal(result.skipped, "disabled");
+  assert.equal(readData().partnerConfig.hanako.status, undefined);
+  assert.equal(getCurrentStatus(readData(), "hanako").source, "baseline");
 });
 
 test("心跳接入：没有心意计划待办时，伙伴自主状态仍会单独自检", async () => {
