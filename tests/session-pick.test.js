@@ -262,3 +262,27 @@ test("粗筛边界包含第 60 个会话候选，不因边界截断漏掉真实�
   const mod = await freshDataModule(home);
   assert.equal(mod.findLatestSessionPath("hanako"), boundary);
 });
+
+test("当前活跃助手缓存：普通读取复用，强制读取可跟上新发言", async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "wv-sess-cache-"));
+  try {
+    const hanakoDir = path.join(home, "agents", "hanako", "sessions");
+    const helperBDir = path.join(home, "agents", "helperB", "sessions");
+    fs.mkdirSync(hanakoDir, { recursive: true });
+    fs.mkdirSync(helperBDir, { recursive: true });
+    const hanakoAt = new Date(Date.now() - 3000).toISOString();
+    const helperAt = new Date(Date.now() - 4000).toISOString();
+    makeSession(hanakoDir, "hanako.jsonl", { userAt: hanakoAt });
+    const helperPath = makeSession(helperBDir, "helperB.jsonl", { userAt: helperAt });
+
+    const mod = await freshDataModule(home);
+    assert.equal(mod.findMostActiveAgentId(["hanako", "helperB"]), "hanako");
+
+    const newerAt = new Date(Date.now() - 500).toISOString();
+    fs.appendFileSync(helperPath, sessionLine("user", newerAt, "刚刚切到的新窗口") + "\n", "utf8");
+    assert.equal(mod.findMostActiveAgentId(["hanako", "helperB"]), "hanako", "缓存期内不应重复尾扫");
+    assert.equal(mod.findMostActiveAgentId(["hanako", "helperB"], { force: true }), "helperB");
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});

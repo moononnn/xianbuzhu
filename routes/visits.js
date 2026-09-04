@@ -56,7 +56,8 @@ export function registerVisits(app, ctx) {
     const today = getToday(data);
     const ts = todayStr();
 
-    const activity = scanTodayActivity(data);
+    const forceActivityRefresh = c.req?.query?.("refreshActivity") === "1";
+    const activity = scanTodayActivity(data, { force: forceActivityRefresh });
     const partnerConfig = getPartnerConfig(data);
     const userName = getUserDisplayName();
 
@@ -251,7 +252,11 @@ export function registerVisits(app, ctx) {
       heartInbox: heartSummary.hearts,
       heartOmittedCount: heartSummary.omittedCount,
       heartSettings: {
+        enabled: data.heartSettings?.enabled !== false,
         frequency: data.heartSettings?.frequency || "low",
+      },
+      statusSettings: {
+        autonomousEnabled: data.statusSettings?.autonomousEnabled !== false,
       },
       pendingPartners: [
         ...new Set(
@@ -359,7 +364,8 @@ export function registerVisits(app, ctx) {
   app.get("/api/current-agent", async (c) => {
     try {
       const partnerIds = getPartnerIds(loadData());
-      const agentId = findMostActiveAgentId(partnerIds);
+      const forceRefresh = c.req?.query?.("refresh") === "1";
+      const agentId = findMostActiveAgentId(partnerIds, { force: forceRefresh });
       return json({ success: true, agentId });
     } catch (e) {
       console.error("[闲不住] 获取当前 agent 失败:", e?.message || e);

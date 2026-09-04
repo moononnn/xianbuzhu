@@ -103,6 +103,7 @@ test("活动扫描：旧会话被触碰 mtime 也不会冒充今天的聊天或�
       [privateFilename]: { plugin: { ownerPluginId: "drift-bottle", visibility: "plugin_private" } },
     }), "utf8");
     mod.clearWorkStatsCache();
+    mod.clearActivityCache();
     const withoutPluginPrivate = mod.scanTodayActivity(data);
     assert.equal(withoutPluginPrivate.helperB.title, null, "插件私有会话不能冒充今日用户活动");
     assert.equal(withoutPluginPrivate.helperB.dispatched, null);
@@ -126,6 +127,7 @@ test("活动扫描：旧会话被触碰 mtime 也不会冒充今天的聊天或�
       sess_activity_current: "今天的真实会话标题",
     }), "utf8");
     mod.clearWorkStatsCache();
+    mod.clearActivityCache();
 
     const afterToday = mod.scanTodayActivity(data);
     assert.equal(afterToday.helperB.title, "今天的真实会话标题");
@@ -151,6 +153,7 @@ test("活动扫描：旧会话被触碰 mtime 也不会冒充今天的聊天或�
       },
     }), "utf8");
     mod.clearWorkStatsCache();
+    mod.clearActivityCache();
     const callerWithoutPluginPrivate = mod.scanTodayActivity(data);
     assert.equal(callerWithoutPluginPrivate.helperA.title, null, "插件私有会话不能冒充今日用户活动");
     assert.equal(callerWithoutPluginPrivate.helperA.dispatched, null);
@@ -160,6 +163,65 @@ test("活动扫描：旧会话被触碰 mtime 也不会冒充今天的聊天或�
       fileOps: 0,
       subagentDispatches: 0,
     }, "插件私有会话不能计入今日工作量");
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("活动扫描缓存：普通读取复用，强制刷新读取新会话并保留同遍委派记录", async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "wv-activity-cache-"));
+  try {
+    const partnerDir = path.join(home, "agents", "helperB", "sessions");
+    const callerDir = path.join(home, "agents", "helperA", "sessions");
+    fs.mkdirSync(partnerDir, { recursive: true });
+    fs.mkdirSync(callerDir, { recursive: true });
+    const today = new Date(Date.now() + 480 * 60 * 1000).toISOString().slice(0, 10);
+    const firstAt = new Date(Date.now() - 5 * 1000).toISOString();
+    const secondAt = new Date(Date.now() - 1000).toISOString();
+    const firstPath = writeSession(partnerDir, `${today}-first.jsonl`, [
+      sessionLine("user", firstAt, "第一件事"),
+    ]);
+    fs.writeFileSync(`${firstPath}.files.json`, JSON.stringify({ sessionId: "sess_activity_first" }), "utf8");
+    writeSession(callerDir, `${today}-caller.jsonl`, [
+      sessionLine("assistant", secondAt, [
+        { type: "toolCall", name: "subagent", arguments: { agent: "helperB", task: "今天的委派任务" } },
+      ]),
+    ]);
+    fs.writeFileSync(path.join(partnerDir, "session-titles.json"), JSON.stringify({
+      sess_activity_first: "第一件事标题",
+    }), "utf8");
+    fs.writeFileSync(path.join(callerDir, "session-titles.json"), "{}", "utf8");
+
+    const data = {
+      partnerConfig: {
+        helperA: { name: "伙伴A" },
+        helperB: { name: "伙伴B" },
+      },
+    };
+    const mod = await freshActivityModule(home);
+    const first = mod.scanTodayActivity(data);
+    assert.equal(first.helperB.title, "第一件事标题");
+    assert.equal(first.helperB.dispatched, "今天的委派任务");
+    assert.equal(first.helperB.dispatchedBy, "helperA");
+
+    const secondPath = writeSession(partnerDir, `${today}-second.jsonl`, [
+      sessionLine("user", secondAt, "第二件事"),
+    ]);
+    fs.writeFileSync(`${secondPath}.files.json`, JSON.stringify({ sessionId: "sess_activity_second" }), "utf8");
+    fs.writeFileSync(path.join(partnerDir, "session-titles.json"), JSON.stringify({
+      sess_activity_first: "第一件事标题",
+      sess_activity_second: "第二件事标题",
+    }), "utf8");
+
+    const cached = mod.scanTodayActivity(data);
+    assert.equal(cached.helperB.title, "第一件事标题", "缓存期内不应重复扫描新会话");
+    const forced = mod.scanTodayActivity(data, { force: true });
+    assert.equal(forced.helperB.title, "第二件事标题");
+    assert.equal(forced.helperB.dispatched, "今天的委派任务");
+
+    mod.clearActivityCache();
+    const cleared = mod.scanTodayActivity(data);
+    assert.equal(cleared.helperB.title, "第二件事标题");
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
   }

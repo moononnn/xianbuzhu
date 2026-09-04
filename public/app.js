@@ -257,7 +257,8 @@
     showHeartGuide: false,
     heartInbox: [],
     heartOmittedCount: 0,
-    heartSettings: { frequency: 'low' },
+    heartSettings: { enabled: true, frequency: 'low' },
+    statusSettings: { autonomousEnabled: true },
     temperamentOptions: [],
     temperamentDraft: null,
     statusPanel: null,
@@ -464,13 +465,30 @@
     html += '<div class="llm-help">API Key 仅保存在本地并做混淆处理，请勿上传数据文件。</div>';
     html += '<div class="heart-setting-block">';
     html += '<div class="heart-setting-title">助手与心意</div>';
+    var statusAutonomyEnabled = state.statusSettings.autonomousEnabled !== false;
+    html += '<div class="heart-setting-row status-setting-row">';
+    html += '<div class="status-setting-copy"><span>伙伴自主状态</span><span class="status-setting-note">伙伴会根据当下状态偶尔挂一条小短句</span></div>';
+    html += '<button type="button" class="status-autonomy-toggle' + (statusAutonomyEnabled ? ' on' : '') + '" data-status-autonomy-toggle onclick="window._tbToggleStatusAutonomy()" role="switch" aria-checked="' + (statusAutonomyEnabled ? 'true' : 'false') + '">';
+    html += '<span class="status-autonomy-label">' + (statusAutonomyEnabled ? '已开启' : '已关闭') + '</span>';
+    html += '<span class="status-autonomy-switch' + (statusAutonomyEnabled ? ' on' : '') + '"><span class="status-autonomy-thumb"></span></span>';
+    html += '</button></div>';
+    html += '<div class="llm-help status-setting-help">关闭后停止后台判断，伙伴也不会在聊天里新增、切换或清除状态；已挂状态会按自己的保持时间自然结束，不会立刻清掉。</div>';
+    var heartAutonomyEnabled = state.heartSettings.enabled !== false;
+    html += '<div class="heart-setting-row status-setting-row">';
+    html += '<div class="status-setting-copy"><span>主动心意</span><span class="status-setting-note">伙伴会在合适的时机，给你留下一点小心意</span></div>';
+    html += '<button type="button" class="status-autonomy-toggle' + (heartAutonomyEnabled ? ' on' : '') + '" data-heart-autonomy-toggle onclick="window._tbToggleHeartAutonomy()" role="switch" aria-checked="' + (heartAutonomyEnabled ? 'true' : 'false') + '">';
+    html += '<span class="status-autonomy-label">' + (heartAutonomyEnabled ? '已开启' : '已关闭') + '</span>';
+    html += '<span class="status-autonomy-switch' + (heartAutonomyEnabled ? ' on' : '') + '"><span class="status-autonomy-thumb"></span></span>';
+    html += '</button></div>';
+    html += '<div class="llm-help status-setting-help">关闭后不再生成或投递新的主动心意；信箱里已有的心意仍会保留。</div>';
     html += '<button class="heart-entry-btn" onclick="window._tbOpenEditPartners()">管理助手列表</button>';
     html += '<div class="heart-entry-hint">隐藏/找回伙伴，调整每位助手的心意节奏。</div>';
     html += '<div class="heart-setting-row"><span>整体心意密度</span><div class="heart-frequency-group">';
-    html += '<button data-heart-frequency="low" class="heart-frequency-btn' + (state.heartSettings.frequency === 'low' ? ' active' : '') + '" onclick="window._tbHeartFrequency(\'low\')">偶尔</button>';
-    html += '<button data-heart-frequency="medium" class="heart-frequency-btn' + (state.heartSettings.frequency === 'medium' ? ' active' : '') + '" onclick="window._tbHeartFrequency(\'medium\')">刚刚好</button>';
-    html += '<button data-heart-frequency="high" class="heart-frequency-btn' + (state.heartSettings.frequency === 'high' ? ' active' : '') + '" onclick="window._tbHeartFrequency(\'high\')">多一点</button>';
+    html += '<button data-heart-frequency="low" class="heart-frequency-btn' + (state.heartSettings.frequency === 'low' ? ' active' : '') + '"' + (heartAutonomyEnabled ? '' : ' disabled') + ' onclick="window._tbHeartFrequency(\'low\')">偶尔</button>';
+    html += '<button data-heart-frequency="medium" class="heart-frequency-btn' + (state.heartSettings.frequency === 'medium' ? ' active' : '') + '"' + (heartAutonomyEnabled ? '' : ' disabled') + ' onclick="window._tbHeartFrequency(\'medium\')">刚刚好</button>';
+    html += '<button data-heart-frequency="high" class="heart-frequency-btn' + (state.heartSettings.frequency === 'high' ? ' active' : '') + '"' + (heartAutonomyEnabled ? '' : ' disabled') + ' onclick="window._tbHeartFrequency(\'high\')">多一点</button>';
     html += '</div></div>';
+    html += '<div class="heart-entry-hint heart-frequency-disabled-hint" data-heart-frequency-disabled-hint' + (heartAutonomyEnabled ? ' hidden' : '') + '>开启主动心意后可调整整体心意密度。</div>';
     html += '<div class="llm-help">这里调整所有助手总体出现的机会；每位助手还会按自己的心意节奏，决定多久想起你、用什么方式留下心意。</div>';
     html += '</div>';
     html += '<div class="llm-action-row"><button class="llm-save" onclick="window._tbLLMSave()">保存设置</button>';
@@ -1088,8 +1106,6 @@
     if (!body || !panel) return;
     var baselineCurrent = panel.current && panel.current.source === 'baseline';
     var current = panel.current && !baselineCurrent ? panel.current : null;
-    var currentPublic = current && (panel.publicStatuses || []).find(function(item) { return item.id === current.id; });
-    var currentLocked = currentPublic && currentPublic.unlocked === false;
     var currentLabel = current
       ? (current.text || '')
       : (baselineCurrent ? '今天还没有新的状态决定' : '还没有挂状态');
@@ -1101,7 +1117,7 @@
       var expiryText = current.duration === 'hour' ? '保持 1 小时' : current.duration === 'four_hours' ? '保持 4 小时' : current.duration === 'until_changed' ? '会一直保持，直到伙伴自己换掉它' : '保持到今天结束';
       html += '<div class="status-current-expiry">' + expiryText + '</div>';
       if (current.source === 'autonomous') {
-        html += '<div class="status-current-source">' + (currentLocked ? '由伙伴自己决定的临时状态，未占用这位伙伴的解锁额度' : '由伙伴自己决定，合适时会继续保持或换掉') + '</div>';
+        html += '<div class="status-current-source">由伙伴自己决定，合适时会继续保持或换掉</div>';
       }
     }
     html += '</div>';
@@ -1199,7 +1215,7 @@
     var pOwned = pDeco.owned || {};
     var pEquipped = pDeco.equipped || {};
     var categoryItems = category === 'status'
-      ? ((partner && partner.statusCollection) || state.statusCollection || [])
+      ? (partner && Array.isArray(partner.statusCollection) ? partner.statusCollection : [])
       : (state.decorationItems || []).filter(function(item) {
         return item.type === 'avatarFrame';
       });
@@ -1570,7 +1586,7 @@
     var partner = findPartner(targetPartnerId);
     var collection = partner && Array.isArray(partner.statusCollection)
       ? partner.statusCollection
-      : (state.statusCollection || []);
+      : [];
     var status = null;
     for (var i = 0; i < collection.length; i++) {
       if (collection[i].id === statusId) { status = collection[i]; break; }
@@ -1920,11 +1936,92 @@
   var _llmProviders = [];
 
   function refreshHeartSettingControls() {
+    var settings = state.heartSettings || {};
+    var enabled = settings.enabled !== false;
     var frequencyButtons = document.querySelectorAll('[data-heart-frequency]');
     for (var i = 0; i < frequencyButtons.length; i++) {
-      frequencyButtons[i].classList.toggle('active', frequencyButtons[i].getAttribute('data-heart-frequency') === state.heartSettings.frequency);
+      frequencyButtons[i].classList.toggle('active', frequencyButtons[i].getAttribute('data-heart-frequency') === settings.frequency);
+      frequencyButtons[i].disabled = !enabled;
     }
+    var frequencyHint = document.querySelector('[data-heart-frequency-disabled-hint]');
+    if (frequencyHint) frequencyHint.hidden = enabled;
+    var toggle = document.querySelector('[data-heart-autonomy-toggle]');
+    if (!toggle) return;
+    toggle.classList.toggle('on', enabled);
+    toggle.setAttribute('aria-checked', enabled ? 'true' : 'false');
+    var label = toggle.querySelector('.status-autonomy-label');
+    if (label) label.textContent = enabled ? '已开启' : '已关闭';
+    var track = toggle.querySelector('.status-autonomy-switch');
+    if (track) track.classList.toggle('on', enabled);
   }
+
+  function refreshStatusAutonomyControl() {
+    var toggle = document.querySelector('[data-status-autonomy-toggle]');
+    if (!toggle) return;
+    var enabled = state.statusSettings.autonomousEnabled !== false;
+    toggle.classList.toggle('on', enabled);
+    toggle.setAttribute('aria-checked', enabled ? 'true' : 'false');
+    var label = toggle.querySelector('.status-autonomy-label');
+    if (label) label.textContent = enabled ? '已开启' : '已关闭';
+    var track = toggle.querySelector('.status-autonomy-switch');
+    if (track) track.classList.toggle('on', enabled);
+  }
+
+  window._tbToggleStatusAutonomy = async function() {
+    var previous = state.statusSettings.autonomousEnabled !== false;
+    var enabled = !previous;
+    state.statusSettings.autonomousEnabled = enabled;
+    refreshStatusAutonomyControl();
+    var toggle = document.querySelector('[data-status-autonomy-toggle]');
+    if (toggle) toggle.disabled = true;
+    try {
+      var data = await api('/api/status-settings', {
+        method: 'POST',
+        body: JSON.stringify({ enabled: enabled }),
+      });
+      if (data.success) {
+        state.statusSettings = data.settings || state.statusSettings;
+        toast(enabled ? '伙伴自主状态已开启' : '伙伴自主状态已关闭');
+      } else {
+        state.statusSettings.autonomousEnabled = previous;
+        toast(data.error || '调整失败', 'error');
+      }
+    } catch (e) {
+      state.statusSettings.autonomousEnabled = previous;
+      toast('调整失败，请再试一次', 'error');
+    } finally {
+      if (toggle) toggle.disabled = false;
+      refreshStatusAutonomyControl();
+    }
+  };
+
+  window._tbToggleHeartAutonomy = async function() {
+    var previous = state.heartSettings.enabled !== false;
+    var enabled = !previous;
+    state.heartSettings.enabled = enabled;
+    refreshHeartSettingControls();
+    var toggle = document.querySelector('[data-heart-autonomy-toggle]');
+    if (toggle) toggle.disabled = true;
+    try {
+      var data = await api('/api/heart-settings', {
+        method: 'POST',
+        body: JSON.stringify({ enabled: enabled }),
+      });
+      if (data.success) {
+        state.heartSettings = data.settings || state.heartSettings;
+        toast(enabled ? '主动心意已开启' : '主动心意已关闭');
+      } else {
+        state.heartSettings.enabled = previous;
+        toast(data.error || '调整失败', 'error');
+      }
+    } catch (e) {
+      state.heartSettings.enabled = previous;
+      toast('调整失败，请再试一次', 'error');
+    } finally {
+      if (toggle) toggle.disabled = false;
+      refreshHeartSettingControls();
+    }
+  };
 
   window._tbHeartFrequency = async function(frequency) {
     var previous = state.heartSettings.frequency;
@@ -2184,7 +2281,8 @@
   // ─── 加载数据 ───
   async function loadData() {
     try {
-      var data = await api('/api/data');
+      // 打开页面时绕过活动缓存，确保刚切换的聊天窗口立即反映到展板。
+      var data = await api('/api/data?refreshActivity=1');
       state.jar = data.jar || 0;
       state.newAvailable = data.newAvailable || 0;
       state.sectionTitle = data.sectionTitle || '';
@@ -2204,6 +2302,7 @@
       state.heartInbox = data.heartInbox || [];
       state.heartOmittedCount = data.heartOmittedCount || 0;
       state.heartSettings = data.heartSettings || state.heartSettings;
+      if (data.statusSettings && typeof data.statusSettings === 'object') state.statusSettings = data.statusSettings;
       state.version = data.version || '0.1.0';
       state.pendingDetails = data.pendingDetails || [];
 
@@ -2222,7 +2321,7 @@
 
       // v0.4：自动选中"当前正在聊的 agent"
       try {
-        var curRes = await api('/api/current-agent');
+        var curRes = await api('/api/current-agent?refresh=1');
         if (curRes.success && curRes.agentId) {
           state.currentAgentId = curRes.agentId;
           var matched = false;
@@ -2244,6 +2343,7 @@
       }
 
       render();
+      lastImmediateRefreshAt = Date.now();
 
       // 风铃：打开页面自动启动（用户手动收起过则本次不再弹）
       window._tbFenglingAutoBoot();
@@ -2279,52 +2379,168 @@
     return false;
   }
 
-  // ─── v0.4：定时轮询当前 agent / 心意 / 状态 / 风铃（5 秒一次）──
-  setInterval(async function() {
-    // 心意到达后，页面本身也能看到轻提示；风铃只是信使，不承担回复。
-    try {
-      var heartState = await api('/api/data');
-      var heartChanged = state.hasHearts !== !!heartState.hasHearts
-        || state.hasNewHearts !== !!heartState.hasNewHearts
-        || state.showHeartGuide !== !!heartState.showHeartGuide;
-      state.hasHearts = !!heartState.hasHearts;
-      state.hasNewHearts = !!heartState.hasNewHearts;
-      state.showHeartGuide = !!heartState.showHeartGuide;
-      state.heartInbox = heartState.heartInbox || state.heartInbox;
-      state.heartOmittedCount = heartState.heartOmittedCount || 0;
-      state.heartSettings = heartState.heartSettings || state.heartSettings;
-      var partnerChanged = partnerStatusesChanged(heartState.partners);
-      if (partnerChanged) state.partners = heartState.partners;
-      if (heartChanged || partnerChanged) render();
-    } catch {}
+  // 空闲伙伴的 doing 是后端随机取的摸鱼文案，不能把它当成真实活动变化。
+  // 只有忙闲切换，或忙碌中的话题/委派文字变化，才需要刷新伙伴卡。
+  function partnerActivitiesChanged(nextPartners) {
+    if (!Array.isArray(nextPartners) || !Array.isArray(state.partners)) return Array.isArray(nextPartners);
+    if (nextPartners.length !== state.partners.length) return true;
+    var oldById = {};
+    for (var i = 0; i < state.partners.length; i++) oldById[state.partners[i].id] = state.partners[i];
+    for (var j = 0; j < nextPartners.length; j++) {
+      var next = nextPartners[j];
+      var old = oldById[next.id];
+      if (!old || !!old.active !== !!next.active) return true;
+      if (next.active && String(old.doing || '') !== String(next.doing || '')) return true;
+    }
+    return false;
+  }
 
-    try {
-      var curRes = await api('/api/current-agent');
-      if (curRes.success && curRes.agentId) {
-        var prev = state.currentAgentId;
-        state.currentAgentId = curRes.agentId;
-        if (prev !== curRes.agentId && !window._tbUserSelected) {
-          var matched = false;
-          for (var pi = 0; pi < state.partners.length; pi++) {
-            if (state.partners[pi].id === curRes.agentId) { matched = true; break; }
-          }
-          if (matched) {
-            state.selectedPartnerId = curRes.agentId;
-            render();
-          }
-        }
+  function applyPolledBoardData(heartState) {
+    if (!heartState || !Array.isArray(heartState.partners)) return false;
+    var heartChanged = state.hasHearts !== !!heartState.hasHearts
+      || state.hasNewHearts !== !!heartState.hasNewHearts
+      || state.showHeartGuide !== !!heartState.showHeartGuide;
+    var nextStatusSettings = heartState.statusSettings && typeof heartState.statusSettings === 'object'
+      ? heartState.statusSettings
+      : { autonomousEnabled: true };
+    var nextHeartSettings = heartState.heartSettings && typeof heartState.heartSettings === 'object'
+      ? heartState.heartSettings
+      : state.heartSettings;
+    var nextHeartEnabled = nextHeartSettings.enabled !== false;
+    var nextHeartFrequency = nextHeartSettings.frequency || state.heartSettings.frequency;
+    var statusSettingChanged = state.statusSettings.autonomousEnabled !== (nextStatusSettings.autonomousEnabled !== false);
+    var heartSettingChanged = (state.heartSettings.enabled !== nextHeartEnabled)
+      || (state.heartSettings.frequency !== nextHeartFrequency);
+    state.hasHearts = !!heartState.hasHearts;
+    state.hasNewHearts = !!heartState.hasNewHearts;
+    state.showHeartGuide = !!heartState.showHeartGuide;
+    state.heartInbox = heartState.heartInbox || state.heartInbox;
+    state.heartOmittedCount = heartState.heartOmittedCount || 0;
+    state.heartSettings = nextHeartSettings;
+    if (state.heartSettings.frequency !== nextHeartFrequency) state.heartSettings.frequency = nextHeartFrequency;
+    state.statusSettings = nextStatusSettings;
+
+    var statusChanged = partnerStatusesChanged(heartState.partners);
+    var activityChanged = partnerActivitiesChanged(heartState.partners);
+    if (statusChanged || activityChanged) state.partners = heartState.partners;
+    // sectionTitle 每次后端 GET 都可能随机换文案，只在真实活动变化时接收它，避免页面抖动。
+    if (activityChanged && typeof heartState.sectionTitle === 'string') state.sectionTitle = heartState.sectionTitle;
+    if (heartChanged || heartSettingChanged || statusSettingChanged || statusChanged || activityChanged) render();
+    return true;
+  }
+
+  function applyCurrentAgentResult(curRes) {
+    if (!curRes || !curRes.success || !curRes.agentId) return;
+    var prev = state.currentAgentId;
+    state.currentAgentId = curRes.agentId;
+    if (prev !== curRes.agentId && !window._tbUserSelected) {
+      var matched = false;
+      for (var pi = 0; pi < state.partners.length; pi++) {
+        if (state.partners[pi].id === curRes.agentId) { matched = true; break; }
       }
-    } catch {}
-
-    // 风铃：同步实际运行状态（右键关闭风铃后，按钮对勾自动消失）
-    try {
-      var fst = await api('/api/fengling/status');
-      if (fst && fst.ok && !!fst.running !== state.fenglingRunning) {
-        state.fenglingRunning = !!fst.running;
+      if (matched) {
+        state.selectedPartnerId = curRes.agentId;
         render();
       }
-    } catch {}
+    }
+  }
+
+  // 轻状态仍可较快同步，但活动文件扫描由服务端 30 秒缓存控制。
+  var boardDataInFlight = null;
+  var boardDataInFlightForce = false;
+  var boardDataForceQueued = false;
+  function refreshBoardData(forceActivity) {
+    forceActivity = forceActivity === true;
+    if (boardDataInFlight) {
+      if (forceActivity && !boardDataInFlightForce) {
+        boardDataForceQueued = true;
+        return boardDataInFlight.then(function() {
+          if (!boardDataForceQueued) return false;
+          boardDataForceQueued = false;
+          return refreshBoardData(true);
+        });
+      }
+      return boardDataInFlight;
+    }
+    boardDataInFlightForce = forceActivity;
+    boardDataInFlight = api(forceActivity ? '/api/data?refreshActivity=1' : '/api/data')
+      .then(applyPolledBoardData)
+      .catch(function() { return false; })
+      .finally(function() {
+        boardDataInFlight = null;
+        boardDataInFlightForce = false;
+      });
+    return boardDataInFlight;
+  }
+
+  var currentAgentInFlight = null;
+  var currentAgentInFlightForce = false;
+  var currentAgentForceQueued = false;
+  function refreshCurrentAgent(forceRefresh) {
+    forceRefresh = forceRefresh === true;
+    if (currentAgentInFlight) {
+      if (forceRefresh && !currentAgentInFlightForce) {
+        currentAgentForceQueued = true;
+        return currentAgentInFlight.then(function() {
+          if (!currentAgentForceQueued) return false;
+          currentAgentForceQueued = false;
+          return refreshCurrentAgent(true);
+        });
+      }
+      return currentAgentInFlight;
+    }
+    currentAgentInFlightForce = forceRefresh;
+    currentAgentInFlight = api(forceRefresh ? '/api/current-agent?refresh=1' : '/api/current-agent')
+      .then(function(curRes) {
+        applyCurrentAgentResult(curRes);
+        return true;
+      })
+      .catch(function() { return false; })
+      .finally(function() {
+        currentAgentInFlight = null;
+        currentAgentInFlightForce = false;
+      });
+    return currentAgentInFlight;
+  }
+
+  var lastImmediateRefreshAt = 0;
+  function refreshBoardNow() {
+    if (document.hidden) return;
+    var now = Date.now();
+    if (now - lastImmediateRefreshAt < 1500) return;
+    lastImmediateRefreshAt = now;
+    refreshBoardData(true);
+    refreshCurrentAgent(true);
+  }
+
+  // ─── 轻状态轮询（5 秒一次）；活动重扫描由后端 30 秒缓存控制 ───
+  var lightPollInFlight = false;
+  setInterval(async function() {
+    if (document.hidden || lightPollInFlight) return;
+    lightPollInFlight = true;
+    try {
+      // 心意到达后，页面本身也能看到轻提示；风铃只是信使，不承担回复。
+      await refreshBoardData(false);
+      await refreshCurrentAgent(false);
+
+      // 风铃：同步实际运行状态（右键关闭风铃后，按钮对勾自动消失）
+      try {
+        var fst = await api('/api/fengling/status');
+        if (fst && fst.ok && !!fst.running !== state.fenglingRunning) {
+          state.fenglingRunning = !!fst.running;
+          render();
+        }
+      } catch {}
+    } finally {
+      lightPollInFlight = false;
+    }
   }, 5000);
+
+  // 打开/切回展板时立即绕过缓存；不可见时停止轮询，避免后台空转。
+  window.addEventListener('focus', refreshBoardNow);
+  document.addEventListener('visibilitychange', function() {
+    if (!document.hidden) refreshBoardNow();
+  });
 
 
   // ─── 启动 ───
