@@ -68,6 +68,12 @@ const {
   archiveExpiredHearts,
   buildHeartPrompt,
   chooseHeartEvent,
+  chooseHeartExpressionMode,
+  recentHeartExpressionModes,
+  recentHeartMessageSamples,
+  reusesDefaultHeartScene,
+  hasUnsupportedHeartFacts,
+  extractHeartContextSeed,
   classifyHeartGenerationError,
   hasHeartLiveFlavor,
   isHeartEventConsistent,
@@ -286,6 +292,108 @@ test("主动心意选择：送礼为主，异步现场穿插，不复用实时�
   assert.notEqual(scene.id, "quiet");
 });
 
+test("主动心意选择：默认现场改为开放情境，旧场景只作方向样本", () => {
+  const scene = chooseHeartEvent(
+    [{ id: "coffee", name: "咖啡", icon: "☕", price: 25 }],
+    () => 0.99,
+  );
+  assert.equal(scene.eventType, "scene");
+  assert.equal(scene.id, "contextual-moment");
+  assert.match(scene.promptContext, /天气|安排|时间/);
+
+  const migrated = chooseHeartEvent(
+    [{ id: "coffee", name: "咖啡", icon: "☕", price: 25 }],
+    () => 0.99,
+    [{ id: "sticky-note", eventType: "scene", name: "旧便签", icon: "📝" }],
+  );
+  assert.equal(migrated.id, "contextual-moment", "旧数据里的固定场景也不能复活");
+});
+
+test("主动心意表达方向：近期用过的方向会短暂排除", () => {
+  const first = chooseHeartExpressionMode([], () => 0);
+  assert.equal(first.id, "daily-context");
+  const next = chooseHeartExpressionMode([first.id], () => 0);
+  assert.notEqual(next.id, first.id);
+  assert.equal(
+    chooseHeartExpressionMode([
+      "daily-context",
+      "sensory-observation",
+      "recent-topic",
+      "body-rhythm",
+      "playful-turn",
+      "direct-thought",
+      "left-trace",
+    ], () => 0).id,
+    "daily-context",
+    "全部方向冷却后应回退到完整池，不应卡死",
+  );
+
+  const now = Date.parse("2026-08-20T00:00:00.000Z");
+  const data = {
+    heartInbox: [
+      { partnerId: "hanako", expressionMode: "direct-thought", message: "今天先别把自己排得太满。", createdAt: "2026-08-19T00:00:00.000Z" },
+      { partnerId: "hanako", gift: { id: "sticky-note" }, message: "屏幕边缘贴了张便签。", createdAt: "2026-08-18T00:00:00.000Z" },
+      { partnerId: "hanako", expressionMode: "body-rhythm", message: "喝口水再继续。", createdAt: "2026-08-10T00:00:00.000Z" },
+    ],
+  };
+  const modes = recentHeartExpressionModes(data, "hanako", now, 3 * 24 * 60 * 60 * 1000);
+  assert.deepEqual(modes, ["direct-thought", "left-trace"]);
+  assert.deepEqual(
+    recentHeartMessageSamples(data, "hanako", now, 3 * 24 * 60 * 60 * 1000),
+    ["今天先别把自己排得太满。", "屏幕边缘贴了张便签。"],
+  );
+});
+
+test("主动心意提示词：开放情境接收当天线索，不再把便签场景当默认答案", () => {
+  const prompt = buildHeartPrompt({
+    partnerName: "小花",
+    description: "温暖自主",
+    userName: "朋友",
+    event: { eventType: "scene", id: "contextual-moment", name: "今天的一点小心意", icon: "🌤️" },
+    expressionMode: { id: "daily-context", label: "今天的生活情境", instruction: "从今天的安排落笔" },
+    recentExpressionModes: ["left-trace"],
+    recentHeartSamples: ["屏幕边缘贴了张便签。"],
+    interactionSeeds: ["中午要和慧慧逛街，九点准备化妆"],
+  });
+  assert.match(prompt, /今天的生活情境/);
+  assert.match(prompt, /中午要和慧慧逛街/);
+  assert.match(prompt, /旧样本“便签、浇花、整理桌角、留灯”/);
+  assert.match(prompt, /不要默认使用/);
+  assert.match(prompt, /屏幕边缘贴了张便签/);
+  assert.equal(
+    isHeartEventConsistent("九点了，先去化妆，中午出门慢慢逛。", { id: "contextual-moment" }),
+    true,
+  );
+  assert.equal(reusesDefaultHeartScene("我给你留了一盏小灯。", []), true);
+  assert.equal(reusesDefaultHeartScene("今晚去看小灯展，回来告诉你。", ["今晚想去看小灯展"]), false);
+});
+
+test("主动心意事实护栏：物件和已完成动作必须有当前出处", () => {
+  const facts = ["中午要和慧慧逛街，九点准备化妆，晴天 29°C"];
+  assert.equal(hasUnsupportedHeartFacts("中午出门晒得很，记得慢慢逛。", facts), false);
+  assert.equal(hasUnsupportedHeartFacts("我给你晾好了柚子茶，出门拎着喝。", facts), true);
+  assert.equal(hasUnsupportedHeartFacts("我已经把闹钟设好了，九点记得起床。", facts), true);
+  assert.equal(hasUnsupportedHeartFacts("我帮你盯到时间，安心去逛。", facts), true);
+  assert.equal(hasUnsupportedHeartFacts("妆前提醒我顺一下就给你挂上哈。", facts), true);
+  assert.equal(hasUnsupportedHeartFacts("中午去商场逛逛。", ["中午去商场逛街"]), false);
+});
+
+test("主动心意情境提取：只保留拾光记当天事实，不把天气说明当事实", () => {
+  const raw = [
+    "【今日时光】2026年9月5日星期六 11:50",
+    "今天是：中午要和慧慧逛街，9点提醒我准备化妆",
+    "【窗外】晴空万里，阳光正好，29°C",
+    "天气可以借一个贴合情境的轻微动作自然带出来，例如看了眼手机上的天气预报、往窗外瞄一眼、顺手确认要不要带伞或添衣；不必每轮出现，也不要照抄示例。",
+    "今日待办：中午要和慧慧逛街",
+    "【已收好的上一生活日｜2026-09-04】旧记录",
+  ].join("\n");
+  const extracted = extractHeartContextSeed(raw, 240);
+  assert.match(extracted, /中午要和慧慧逛街/);
+  assert.match(extracted, /29°C/);
+  assert.doesNotMatch(extracted, /天气可以借|带伞|添衣/);
+  assert.doesNotMatch(extracted, /旧记录/);
+});
+
 test("主动心意选择：自动偏好优先，但最近送过的类型会先冷却", () => {
   const event = chooseHeartEvent(
     [
@@ -330,6 +438,7 @@ test("主动心意文案：区分物件用途与异步现场，拒绝实时互�
   assert.match(flowerPrompt, /插进花瓶/);
   assert.match(flowerPrompt, /已经发生、被留下的异步现场/);
   assert.equal(hasHeartLiveFlavor("陪你聊会儿，等你回复"), true);
+  assert.equal(hasHeartLiveFlavor("摆一盘等我来告一哈"), true);
   assert.equal(hasHeartLiveFlavor("我在屏幕边缘贴了张便签"), false);
 
   const scene = publicHeart(makeHeart({
@@ -457,6 +566,14 @@ test("主动心意提示词和审核：把声音、结构、标点与事件一�
   assert.match(review, /换成另一个助手/);
   assert.match(review, /事件保真/);
   assert.match(review, /不是硬性门槛/);
+  const contextualReview = buildReviewPrompt("九点了，先去化妆，中午出门慢慢逛。", {
+    kind: "heart",
+    event: { id: "contextual-moment", name: "今天的一点小心意", icon: "🌤️" },
+    expressionMode: { label: "今天的生活情境", instruction: "从今天的安排落笔" },
+  });
+  assert.match(contextualReview, /开放心意/);
+  assert.match(contextualReview, /不要因为旧样本/);
+  assert.match(contextualReview, /设置、挂上或盯住/);
 });
 
 test("普通小纸条审核提示保持旧契约，不泄漏主动心意专用规则", () => {
@@ -505,7 +622,7 @@ test("buildHeartPrompt: 方言块注入提示词，无方言时完全不带方�
   assert.doesNotMatch(withoutDialect, /你说话带一点口癖/);
 });
 
-test("buildHeartPrompt: 含霸总别扭版 vs 自然版正反例对照", () => {
+test("buildHeartPrompt: 用事实边界替代物件型正反例，避免给开放情境添模板", () => {
   const prompt = buildHeartPrompt({
     partnerName: "朋友A",
     description: "感性助手",
@@ -515,12 +632,12 @@ test("buildHeartPrompt: 含霸总别扭版 vs 自然版正反例对照", () => {
     event: { eventType: "gift", id: "bouquet", name: "一束花", icon: "💐" },
     temperament: { surfaceTag: "温柔", innerTag: "大方" },
   });
-  // 别扭版在提示词里作为“禁止模仿”出现
+  // 开放情境不再在通用正反例里投放窗边、花瓶等具体物件
   assert.match(prompt, /别扭版（禁止模仿）/);
-  assert.match(prompt, /我懒得调，你回来看不顺眼再自己摆/);
-  // 自然版作为参考
+  assert.match(prompt, /补出几个没有出处的物件和动作/);
   assert.match(prompt, /自然版（参考这版的落点和语气）/);
-  assert.match(prompt, /花我插窗边那个瓶子里了哦/);
+  assert.match(prompt, /只抓一个已有线索/);
+  assert.doesNotMatch(prompt, /我懒得调，你回来看不顺眼再自己摆/);
   // 明确要求选第二种
   assert.match(prompt, /你要的是第二种/);
 });

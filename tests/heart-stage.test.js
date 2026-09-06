@@ -270,6 +270,52 @@ test("generateAndSaveHeart: 暂存上限满了不再生成（不烧模型，旧�
   assert.equal(readData().heartInbox.length, 2, "暂存上限到后不新增");
 });
 
+test("generateAndSaveHeart: 开放情境成功生成并落盘表达方向", async () => {
+  const date = todayStr();
+  const entry = makeEntry(date, "contextual-success", { status: "generating" });
+  writeData({
+    ...baseData(date, entry),
+    partnerConfig: {
+      hanako: {
+        name: "小花",
+        variables: { energy: 100, mood: 60, affection: 20 },
+        temperamentSource: "user",
+        surfaceLayer: { tag: "温柔" },
+        innerLayer: { tag: "温柔" },
+      },
+    },
+    heartSettings: { enabled: true, frequency: "low", stageCapPerPartner: 2 },
+    heartPlan: { date, frequency: "low", entries: [entry] },
+    heartInbox: [],
+    shopItems: [],
+    llmConfig: { providerId: "__custom__", modelId: "test-model" },
+    llmCustom: { baseUrl: "https://example.test/v1", apiKey: "test-key", api: "openai-completions" },
+  });
+
+  const previousFetch = globalThis.fetch;
+  globalThis.fetch = async (_url, options) => {
+    const body = JSON.parse(options.body);
+    const prompt = body.messages?.[0]?.content || "";
+    const content = prompt.includes("审核员")
+      ? '{"pass":true}'
+      : "九点到了，先把妆慢慢化好，中午和慧慧逛街别赶着出门。";
+    return { ok: true, json: async () => ({ choices: [{ message: { content } }] }) };
+  };
+  try {
+    const { generateAndSaveHeart } = await import("../lib/hearts.js");
+    const result = await generateAndSaveHeart({ entry, partnerId: "hanako" });
+    assert.equal(result.ok, true);
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+
+  const saved = readData();
+  assert.equal(saved.heartInbox.length, 1);
+  assert.equal(saved.heartInbox[0].gift.id, "contextual-moment");
+  assert.ok(saved.heartInbox[0].expressionMode, "成功心意应落盘表达方向");
+  assert.equal(saved.heartPlan.entries[0].status, "delivered");
+});
+
 function nowISO(ms) {
   return new Date(ms).toISOString();
 }

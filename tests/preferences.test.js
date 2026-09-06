@@ -10,14 +10,13 @@ test("deriveHeartPreferences: 明确设定线索优先加入对应心意类型",
   });
   assert.ok(preferences.giftIds.includes("coffee"));
   assert.ok(preferences.giftIds.includes("flower"));
-  assert.ok(preferences.sceneIds.includes("sticky-note"));
-  assert.ok(preferences.sceneIds.includes("desk-lamp"));
+  assert.deepEqual(preferences.sceneIds, ["contextual-moment"]);
 });
 
 test("deriveHeartPreferences: 没有明确线索时由气质提供有限默认倾向", () => {
   const preferences = deriveHeartPreferences({ temperamentTag: "冷淡" });
   assert.deepEqual(preferences.giftIds, ["tea", "moon"]);
-  assert.deepEqual(preferences.sceneIds, ["desk-lamp", "sticky-note"]);
+  assert.deepEqual(preferences.sceneIds, ["contextual-moment"]);
 });
 
 test("choosePreferredItems: 偏好是软倾向，最近出现的类型先冷却", () => {
