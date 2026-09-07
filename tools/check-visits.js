@@ -95,7 +95,10 @@ export async function execute(args, ctx = {}) {
     if (visits.length === 0) {
       // 没有 pending 时，检查最近一条 completed 的互动/礼物（供助手了解具体内容）
       const recentCompleted = (data.pendingVisits || [])
-        .filter(v => v.status === 'completed' && (!currentAgent || v.to === currentAgent))
+        .filter(v => v.status === 'completed')
+        // 普通互动/礼物已入队但尚未送达时，不能同时靠工具露一次、队列再送一次。
+        .filter(v => !['queued', 'unknown'].includes(v.deliveryStatus))
+        .filter(v => !currentAgent || v.to === currentAgent)
         .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
         .slice(0, 3);
 
