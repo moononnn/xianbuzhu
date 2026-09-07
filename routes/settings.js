@@ -265,6 +265,8 @@ export function registerSettings(app, ctx) {
       result[partnerId] = {
         name: partnerConfig[partnerId]?.name || partnerId,
         color: partnerConfig[partnerId]?.color || "#999",
+        // 与展板共用同一头像路由，显示用户为伙伴配置的头像。
+        avatarUrl: `/api/avatar/${partnerId}`,
         notes: notes.slice().reverse(), // 最新的在前
       };
     }

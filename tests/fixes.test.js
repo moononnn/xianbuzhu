@@ -345,3 +345,37 @@ test("unlock-status: 写盘失败时不把扣款和解锁留在内存或磁盘",
     fs.rmSync(temp, { recursive: true, force: true });
   }
 });
+
+test("/api/notes: 小纸条分组返回与展板一致的头像路由", async () => {
+  fs.mkdirSync(SHARED_DATA_DIR, { recursive: true });
+  fs.writeFileSync(
+    path.join(SHARED_DATA_DIR, "data.json"),
+    JSON.stringify({
+      days: {},
+      lastResetDate: bjToday(),
+      partnerConfig: {
+        hanako: { name: "小花", color: "#4CAF50" },
+      },
+      notes: {
+        hanako: [{ id: 1, content: "留了一句话", triggerType: "interact", createdAt: new Date().toISOString() }],
+      },
+    }),
+    "utf-8",
+  );
+
+  const routes = {};
+  const app = {
+    get: (pathname, handler) => { routes[pathname] = handler; },
+    post: (pathname, handler) => { routes[pathname] = handler; },
+  };
+  const { register } = await import("../routes/api.js?notes-avatar=" + Date.now());
+  await register(app, {});
+
+  const response = await routes["/api/notes"]({ req: {} });
+  const body = JSON.parse(await response.text());
+  assert.equal(body.groups.hanako.avatarUrl, "/api/avatar/hanako");
+
+  const boardResponse = await routes["/api/data"]({ req: { query: () => "" } });
+  const board = JSON.parse(await boardResponse.text());
+  assert.equal(board.partners[0].avatarUrl, body.groups.hanako.avatarUrl);
+});

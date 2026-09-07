@@ -1878,7 +1878,12 @@
 
         html += '<div class="notes-group' + openClass + '">';
         html += '<div class="notes-group-header" onclick="window._tbToggleGroup(this)">';
-        html += '<div class="notes-group-avatar" style="background:' + color + '">' + escapeHtml(initial) + '</div>';
+        if (g.avatarUrl) {
+          var noteAvatarUrl = escapeHtml(BASE + g.avatarUrl + AUTH);
+          html += '<div class="notes-group-avatar" data-initial="' + escapeHtml(initial) + '"><img src="' + noteAvatarUrl + '" alt="" onerror="this.style.display=\'none\';this.parentElement.classList.add(\'avatar-missing\');this.parentElement.insertBefore(document.createTextNode(this.parentElement.dataset.initial),this.parentElement.firstChild)"></div>';
+        } else {
+          html += '<div class="notes-group-avatar" style="background:' + color + '">' + escapeHtml(initial) + '</div>';
+        }
         html += '<span class="notes-group-name">' + escapeHtml(g.name) + '</span>';
         html += '<span class="notes-group-count">' + notes.length + ' 条</span>';
         html += '<span class="notes-group-arrow" aria-hidden="true"></span>';

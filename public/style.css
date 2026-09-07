@@ -1715,6 +1715,13 @@ button:disabled,
   font-size: var(--text-xs);
 }
 
+.notes-group-avatar img {
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  object-fit: cover;
+}
+
 .notes-group-name {
   min-width: 0;
   flex: 1;
