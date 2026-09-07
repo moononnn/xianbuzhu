@@ -12,10 +12,10 @@ process.env.HANA_HOME = tmp;
 
 const {
   DeliveryQueueManager,
-  appendVisitDelivery,
   buildDeliveryBatchText,
   createVisitDelivery,
 } = await import("../lib/delivery-queue.js");
+const { isSelfInjectedPushText } = await import("../lib/data.js");
 
 const dataPath = path.join(tmp, "data", "work-visit", "data.json");
 
@@ -25,6 +25,17 @@ function writeSession(agentId = "hanako", name = "chat.jsonl") {
   const file = path.join(dir, name);
   fs.writeFileSync(file, "", "utf8");
   return file;
+}
+
+function appendSessionMessage(file, content, timestamp = Date.now()) {
+  fs.appendFileSync(
+    file,
+    JSON.stringify({
+      type: "message",
+      message: { role: "user", content, timestamp },
+    }) + "\n",
+    "utf8",
+  );
 }
 
 function writeData({ visits = [], queue = [] } = {}) {
@@ -109,9 +120,10 @@ test("buildDeliveryBatchText: 单条保留原文，多条合并为一次心意",
   const entries = [makeEntry(first), makeEntry(second)];
   assert.equal(buildDeliveryBatchText([entries[0]]), entries[0].text);
   const text = buildDeliveryBatchText(entries);
-  assert.match(text, /用户趁你忙着时给你留了 2 份心意/);
+  assert.match(text, /收到来自用户的 2 份心意，趁你忙着时先收着/);
   assert.match(text, /☕ 咖啡/);
   assert.match(text, /💐 一束花/);
+  assert.equal(isSelfInjectedPushText(text), true, "批量送达文本不能冒充真实用户活跃");
 });
 
 test("DeliveryQueueManager: session_busy 不会丢队列，结束事件后只发送一次", async () => {
@@ -255,6 +267,38 @@ test("DeliveryQueueManager: 进程重载后可恢复未完成的 sending 记录"
   assert.equal(readData().deliveryQueue.length, 0);
 });
 
+test("DeliveryQueueManager: 对账不会把上一批相同文本误认成当前批次", async () => {
+  const sessionPath = writeSession("hanako", "same-text-old.jsonl");
+  const visit = makeVisit("same-text-old-1");
+  const entry = makeEntry(visit, {
+    sessionPath,
+    status: "sending",
+    batchId: "old-uncertain-batch",
+    sendingAt: Date.now(),
+    resolvedSessionPath: sessionPath,
+  });
+  appendSessionMessage(sessionPath, entry.text, Date.now() - 60_000);
+  writeData({ visits: [visit], queue: [entry] });
+  const bus = makeBus(async (topic) => {
+    if (topic === "session:history") {
+      return { messages: [{ role: "user", content: entry.text }] };
+    }
+    throw new Error("不应重新发送上一批相同文本");
+  });
+  const manager = new DeliveryQueueManager({
+    bus,
+    staleSendingMs: 1,
+    historyTimeoutMs: 30,
+    log: quietLog(),
+  });
+
+  await manager.drainNow();
+  assert.equal(bus.calls.filter((call) => call.topic === "session:history").length, 1);
+  assert.equal(bus.calls.filter((call) => call.topic === "session:send").length, 0);
+  assert.equal(readData().deliveryQueue[0].status, "pending");
+  assert.equal(readData().pendingVisits[0].deliveryStatus, "queued");
+});
+
 test("DeliveryQueueManager: session:send 超时先标记 unknown，对账未命中后再回到队列", async () => {
   const sessionPath = writeSession("hanako", "timeout.jsonl");
   const visit = makeVisit("timeout-1");
@@ -298,7 +342,12 @@ test("DeliveryQueueManager: 超时后历史已出现原文则确认送达，不�
       sentText = payload.text;
       throw new Error("session:send timeout");
     }
-    return { messages: [{ role: "user", content: sentText }] };
+    return {
+      messages: [{
+        role: "user",
+        content: sentText.split("\n").map((part) => ({ type: "text", text: part })),
+      }],
+    };
   });
   const manager = new DeliveryQueueManager({
     bus,
@@ -309,6 +358,7 @@ test("DeliveryQueueManager: 超时后历史已出现原文则确认送达，不�
   });
 
   await manager.drainNow();
+  appendSessionMessage(sessionPath, sentText, Date.now());
   await manager.drainNow();
   assert.equal(sendCalls, 1);
   assert.equal(readData().deliveryQueue.length, 0);
