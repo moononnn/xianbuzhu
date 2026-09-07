@@ -64,8 +64,8 @@ function makeEntry(visit, overrides = {}) {
   return {
     ...createVisitDelivery({
       visit,
-      text: `📦 收到来自玥儿的一份心意：${visit.itemName}`,
-      userName: "玥儿",
+      text: `📦 收到来自用户的一份心意：${visit.itemName}`,
+      userName: "用户",
       sessionPath: overrides.sessionPath || "",
     }),
     ...overrides,
@@ -109,7 +109,7 @@ test("buildDeliveryBatchText: 单条保留原文，多条合并为一次心意",
   const entries = [makeEntry(first), makeEntry(second)];
   assert.equal(buildDeliveryBatchText([entries[0]]), entries[0].text);
   const text = buildDeliveryBatchText(entries);
-  assert.match(text, /玥儿趁你忙着时给你留了 2 份心意/);
+  assert.match(text, /用户趁你忙着时给你留了 2 份心意/);
   assert.match(text, /☕ 咖啡/);
   assert.match(text, /💐 一束花/);
 });
