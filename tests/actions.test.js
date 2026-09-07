@@ -199,7 +199,10 @@ test("performVisit: 手动指定 sessionPath 时不会回退到该助手的最�
     { bus },
   );
   assert.equal(result.status, 200);
-  assert.equal(bus.calls[0].payload.sessionPath, fixedPath);
+  assert.equal(bus.calls.length, 0, "普通互动只入队，不在动作请求里直接推送");
+  const saved = readData();
+  assert.equal(saved.deliveryQueue.length, 1);
+  assert.equal(saved.deliveryQueue[0].sessionPath, fixedPath);
 });
 
 test("performVisit: 实际 session 推送包含回礼语义，怪话回礼也保留原文", async () => {
@@ -211,8 +214,10 @@ test("performVisit: 实际 session 推送包含回礼语义，怪话回礼也保
       { type: "interact", itemId: "quiet", to: "hanako" },
       { bus: interactBus },
     );
-    assert.match(interactBus.calls[0].payload.text, /回礼/);
-    assert.match(interactBus.calls[0].payload.text, /一束花/);
+    assert.equal(interactBus.calls.length, 0, "普通互动不直接触发 session:send");
+    const queued = readData().deliveryQueue[0];
+    assert.match(queued.text, /回礼/);
+    assert.match(queued.text, /一束花/);
 
     writeData({ llmConfig: {}, heartInbox: [makeReturnHeart({ id: "heart-2" })] });
     const prankBus = makeBus();
@@ -292,6 +297,9 @@ test("performVisit: 送礼扣价并回赠 3 光粒，记录入库", async () => 
   assert.equal(saved.pendingVisits.length, 1);
   assert.equal(saved.pendingVisits[0].itemId, "coffee");
   assert.equal(saved.pendingVisits[0].status, "completed");
+  assert.equal(saved.pendingVisits[0].deliveryStatus, "queued");
+  assert.equal(saved.deliveryQueue.length, 1);
+  assert.equal(r.body.deliveryStatus, "queued");
 });
 
 test("performVisit: 光粒不足时送礼被拒", async () => {
@@ -315,6 +323,8 @@ test("performVisit: 互动不扣光粒，仅记录", async () => {
   const saved = readData();
   assert.equal(saved.pendingVisits.length, 1);
   assert.equal(saved.pendingVisits[0].status, "completed");
+  assert.equal(saved.pendingVisits[0].deliveryStatus, "queued");
+  assert.equal(saved.deliveryQueue.length, 1);
 });
 
 // ── 模型配置检查 ──
@@ -372,6 +382,7 @@ test("performVisit: 并发送礼不丢记录（写锁串行化）", async () => 
   );
   const saved = readData();
   assert.equal(saved.pendingVisits.length, 3, "三次并发送礼三条记录");
+  assert.equal(saved.deliveryQueue.length, 3, "三次礼物各有一条待投递记录");
   assert.equal(saved.jar, 100 - 3 * 25 + 3 * 3, "光粒按三次扣减");
 });
 
