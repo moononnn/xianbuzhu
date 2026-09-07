@@ -100,12 +100,22 @@ test("check-visits: 未送达的普通心意不与投递队列重复露出", asy
         deliveryStatus: "delivered",
         createdAt: "2026-08-19T10:54:00+08:00",
       },
+      {
+        id: "visit-legacy",
+        type: "prank",
+        itemId: "brainrot",
+        itemName: "冷不丁说句怪话",
+        icon: "🧠",
+        to: "hanako",
+        status: "completed",
+        createdAt: "2026-08-19T10:53:00+08:00",
+      },
     ],
   });
   const result = await execute({}, { agentId: "hanako" });
   const payload = JSON.parse(result.content[0].text);
   assert.equal(payload._recent, true);
-  assert.deepEqual(payload.visits.map((visit) => visit.itemId), ["quiet"]);
+  assert.deepEqual(payload.visits.map((visit) => visit.itemId), ["brainrot"]);
 });
 
 test("check-visits: 聚合回礼告知攒着的心意份数", async () => {
