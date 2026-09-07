@@ -205,7 +205,7 @@ test("performVisit: 手动指定 sessionPath 时不会回退到该助手的最�
   assert.equal(saved.deliveryQueue[0].sessionPath, fixedPath);
 });
 
-test("performVisit: 实际 session 推送包含回礼语义，怪话回礼也保留原文", async () => {
+test("performVisit: 普通互动入队保留回礼语义，怪话回礼仍即时推送", async () => {
   writeSession();
   try {
     writeData({ heartInbox: [makeReturnHeart()] });
