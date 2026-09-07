@@ -9,6 +9,7 @@ import { loadData, saveData, describeMood } from "./lib/data.js";
 import { getPartnerIds, scanPartners } from "./lib/config.js";
 import { startHeartbeat } from "./lib/heartbeat.js";
 import { stopFusionCoordinator } from "./lib/fusion.js";
+import { startDeliveryQueue } from "./lib/delivery-queue.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -21,6 +22,11 @@ class WorkVisitPlugin {
   async onload() {
     // ⚠ Hana runtime 调 c.onload() 不传参，ctx 从 this.ctx 取
     console.log("[闲不住] 插件加载完成");
+
+    // 普通互动/礼物只等待当前回复结束；外派伙伴反馈门控暂不接入本版本。
+    this._deliveryQueueStop?.();
+    this._deliveryQueueStop = startDeliveryQueue(this.ctx || {});
+    console.log("[闲不住] 普通互动投递队列已启动");
 
     // 每次启动重新扫描伙伴列表
     try {
@@ -198,6 +204,8 @@ class WorkVisitPlugin {
   }
 
   async onunload() {
+    this._deliveryQueueStop?.();
+    this._deliveryQueueStop = null;
     this._heartbeatStop?.();
     this._heartbeatStop = null;
     await stopFusionCoordinator({ restore: true, force: true });
