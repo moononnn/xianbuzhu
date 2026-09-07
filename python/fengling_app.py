@@ -2736,7 +2736,10 @@ class FenglingMenu(FadeOnLeaveMixin, QFrame):
                 self.ball.target_mode = "pinned" if target.get("mode") == "pinned" else "auto"
                 self.ball.pinned_target = target.get("pinned")
                 self._update_target_label()
-            self._flash("送达了")
+            if str(res.get("deliveryStatus") or "").lower() == "queued":
+                self._flash("已收好，等忙完送到")
+            else:
+                self._flash("送达了")
             self._refresh_jar()
         else:
             self._flash(res.get("error", "发送失败"))
