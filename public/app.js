@@ -820,10 +820,10 @@
           }
         } else if (type === 'gift') {
           clearPersistentToast();
-          toast(icon + ' 已送给 ' + (findPartner(state.selectedPartnerId) || {}).name);
+          toast(icon + ' 已收好，等忙完送到 ' + (findPartner(state.selectedPartnerId) || {}).name);
         } else {
           clearPersistentToast();
-          toast(icon + ' 已发送');
+          toast(icon + ' 已收好，等忙完送到');
         }
         // 关闭弹窗、刷新状态、保留选中
         window._tbClose();

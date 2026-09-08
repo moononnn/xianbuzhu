@@ -285,8 +285,8 @@ export function registerVisits(app, ctx) {
   });
 
   // ════════════════════════════════════════
-  //  POST /api/visit — 互动 / 礼物 / 恶作剧（推送模式）
-  //  不再依赖 pendingVisits + check-visits，直接推送到助手对话框
+  //  POST /api/visit — 互动 / 礼物 / 恶作剧
+  //  普通互动/礼物记录后进入会话投递队列；恶作剧继续即时推送
   // ════════════════════════════════════════
   app.post("/api/visit", async (c) => {
     const input = await readBody(c);
