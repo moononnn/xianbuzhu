@@ -714,6 +714,8 @@ class FusionBall(QWidget):
         self.pinned_target = None
         self.theme_mode = _ORIGINAL_ZHUJIAN.read_hana_theme_mode()
         self.read_panel = None
+        # 兼容新版解语花面板在 close_menu() 中读取的二级弹窗占位。
+        self.polish_panel = None
         self.ask_flower_dialog = None  # 「问问小花」输入弹窗（右键菜单打开，懒创建）
 
         # 交互状态
