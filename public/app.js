@@ -169,9 +169,10 @@
 
   function statusBadgeHtml(status, extraClass) {
     if (!status || !status.text) return '';
+    var statusText = String(status.text);
     var title = status.source === 'autonomous'
-      ? '由伙伴自己决定的状态'
-      : '当前状态：' + String(status.text);
+      ? '伙伴自己决定的状态：' + statusText
+      : '当前状态：' + statusText;
     var icon = status && typeof status.icon === 'string' && status.icon ? String(status.icon) : '';
     return '<span class="status-chip tone-' + statusToneClass(status) + (extraClass || '') + '" title="' + escapeHtml(title) + '">'
       + (icon
@@ -179,6 +180,13 @@
         : '<span class="status-chip-dot" aria-hidden="true"></span>')
       + '<span class="status-chip-text">' + escapeHtml(String(status.text)) + '</span>'
       + '</span>';
+  }
+
+  // 解锁确认会重建商店列表；恢复时按新列表高度收敛，避免位置越过底部。
+  function restoreDecorationScroll(list, scrollTop) {
+    if (!list || typeof scrollTop !== 'number' || !isFinite(scrollTop)) return;
+    var maxScrollTop = Math.max(0, list.scrollHeight - list.clientHeight);
+    list.scrollTop = Math.min(Math.max(0, scrollTop), maxScrollTop);
   }
 
   // ─── 头像框样式类映射（装饰 ID → CSS 类） ───
@@ -1161,7 +1169,7 @@
 
   // ─── 装饰商店：分类浏览 ───
   // 头像框和高级状态收藏都按伙伴分别拥有。
-  window._tbOpenDeco = function(category) {
+  window._tbOpenDeco = function(category, restoreScrollTop) {
     // 即使某一类暂时为空也照常打开，分类页自己展示空状态；不能让一份空集合封死整个商店。
     var categories = ['avatarFrame', 'status'];
     if (categories.indexOf(category) >= 0) state.decorationCategory = category;
@@ -1198,6 +1206,13 @@
 
     window._tbBuildDecoList();
     overlay.classList.add('show');
+    if (typeof restoreScrollTop === 'number' && isFinite(restoreScrollTop)) {
+      var restore = function() {
+        restoreDecorationScroll(document.getElementById('modal-deco-list'), restoreScrollTop);
+      };
+      if (typeof requestAnimationFrame === 'function') requestAnimationFrame(restore);
+      else setTimeout(restore, 0);
+    }
   };
 
   window._tbBuildDecoList = function() {
@@ -1600,6 +1615,7 @@
     var confirm = document.getElementById('modal-confirm');
     if (!overlay || !modal || !confirm) return;
     var oldList = document.getElementById('modal-deco-list');
+    var restoreScrollTop = oldList ? oldList.scrollTop : 0;
     if (oldList) oldList.remove();
     if (targetSection) targetSection.style.display = 'none';
     if (title) title.textContent = (status.icon || '✨') + ' 为 ' + ((partner && partner.name) || '这位伙伴') + ' 解锁';
@@ -1633,7 +1649,7 @@
         window._tbClose();
         state.decorationCategory = 'status';
         render();
-        window._tbOpenDeco('status');
+        window._tbOpenDeco('status', restoreScrollTop);
       } catch (e) {
         toast(e.message || '解锁失败，请再试一次', 'error');
         confirm.disabled = false;
